@@ -210,6 +210,11 @@ public:
 		return endBlock.sequence;
 	}
 
+	uint16_t getFullBlockCount() const
+	{
+		return endBlock.sequence - startBlock.sequence;
+	}
+
 	/**
 	 * @brief Get time in milliseconds, accounting for wrapping
 	 */
