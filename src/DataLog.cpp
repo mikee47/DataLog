@@ -1,3 +1,5 @@
+#undef DEBUG_VERBOSE_LEVEL
+
 #include "DataLog.h"
 #include <Clock.h>
 #include <debug_progmem.h>
@@ -276,7 +278,7 @@ bool DataLog::writeData(uint16_t domain, const void* data, uint16_t length)
 
 int DataLog::read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSize)
 {
-	debug_i("[DL] read: block %u, offset %u, size %u", block, offset, bufSize);
+	debug_d("[DL] read: block %u, offset %u, size %u", block, offset, bufSize);
 
 	if(offset >= blockSize || block < startBlock.sequence || block >= endBlock.sequence) {
 		return -1;
@@ -291,7 +293,7 @@ int DataLog::read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSiz
 	while(bytesRead < bytesToRead) {
 		readOffset %= totalSize;
 		auto len = std::min(bytesToRead - bytesRead, totalSize - readOffset);
-		debug_i("[DL] read %u, %u", readOffset, len);
+		debug_d("[DL] read %u, %u", readOffset, len);
 		partition.read(readOffset, bufptr, len);
 		bufptr += len;
 		bytesRead += len;
