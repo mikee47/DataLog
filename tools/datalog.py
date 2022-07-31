@@ -34,8 +34,13 @@ def timestr(utc):
 
 class Context:
     def __init__(self):
-        self.systemTimeRef = 0
+        self.reset()
+
+    def reset(self):
+        self.time = None
         self.domains = {}
+        self.domain = None
+        self.fieldOffset = 0
 
 
 class Entry:
@@ -56,16 +61,23 @@ class Entry:
 
         (entrySize, kind, flags) = struct.unpack("<HBB", arr[:4])
         content = arr[4:4+entrySize]
+        entry = None
         if (flags & 0x01) != 0 or kind == Kind.pad:
-            entry = None
-        elif kind in map:
-            entry = map[kind](content, ctx)
+            pass
         else:
-            entry = Entry(kind, content)
+            if kind in map:
+                print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
+                if kind != Kind.field or ctx.domain is not None:
+                    entry = map[kind](content, ctx)
+            if entry is None:
+                entry = Entry(kind, content, ctx)
         return entry, 4 + entrySize
 
     def __str__(self):
         return "%u bytes" % len(self.content)
+
+    def fixup(self, ctx):
+        pass
 
 
 class Boot(Entry):
@@ -81,6 +93,7 @@ class Boot(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.boot
         self.reason = content[0]
+        ctx.reset()
 
     def __str__(self):
         return "reason %s" % Boot.Reason(self.reason)
@@ -90,10 +103,12 @@ class Time(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.time
         (self.systemTime, self.utc) = struct.unpack("<II", content)
-        ctx.systemTimeRef = self.utc - (self.systemTime / 1000)
 
     def __str__(self):
         return "systemTime %u, %s" % (self.systemTime, timestr(self.utc))
+
+    def getUtc(self, systemTime):
+        return self.utc + (systemTime - self.systemTime) / 1000
 
 
 class Domain(Entry):
@@ -101,6 +116,20 @@ class Domain(Entry):
         self.kind = Kind.domain
         (self.id,) = struct.unpack("<H", content[:2])
         self.name = content[2:].decode()
+        self.fields = []
+        ctx.domains[self.id] = self
+        ctx.domain = self
+        ctx.fieldOffset = 0
+
+        # Bugfixes in development
+        if self.name == '':
+            self.name = {
+                1: 'sunsynk/inverter',
+                2: "stsfan/inverter",
+                3: "meter/immersion",
+                4: "nt18b07/immersion"
+            }[self.id]
+
 
     def __str__(self):
         return "id %u, name '%s'" % (self.id, self.name)
@@ -113,26 +142,79 @@ class Field(Entry):
 
     def __init__(self, content, ctx):
         self.kind = Kind.field
+        self.domain = ctx.domain
+        self.domain.fields.append(self)
         (self.id, self.type, self.size) = struct.unpack("<HBB", content[:4])
         self.name = content[4:].decode()
+        self.offset = ctx.fieldOffset
+        ctx.fieldOffset += self.size
+
+        # Bugfixes in development
+        if self.domain.name == 'nt18b07/immersion':
+            self.type = Field.Type.Signed
+
+
+    def typestr(self):
+        if self.type == Field.Type.Float:
+            return {4: "float", 8: "double"}[self.size]
+        elif self.type == Field.Type.Unsigned:
+            return f"uint{self.size*8}_t"
+        elif self.type == Field.Type.Signed:
+            return f"int{self.size*8}_t"
+        else:
+            return f"{Type(self.type)}{self.size*8}"
+
+    def getValue(self, data):
+        map = {
+            Field.Type.Float: {
+                4: "f", 8: "d"
+            },
+            Field.Type.Unsigned: {
+                1: "B", 2: "H", 4: "I", 8: "Q"
+            },
+            Field.Type.Signed: {
+                1: "b", 2: "h", 4: "i", 8: "q"
+            }
+        }
+        fmt = "<" + map[self.type][self.size]
+        (value,) = struct.unpack(fmt, data[self.offset:self.offset+self.size])
+        return round(value, 3)
 
     def __str__(self):
-        return "id %u, %s(%u), name '%s'" % (self.id, Field.Type(self.type), self.size, self.name)
+        return "%s id %u, %s, name '%s'" % (self.domain.name, self.id, self.typestr(), self.name)
 
 
 class Data(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.data
-        self.systemTimeRef = ctx.systemTimeRef
-        (self.systemTime, self.domain, self.reserved) = struct.unpack("<IHH", content[:8])
+        self.time = ctx.time
+        (self.systemTime, domain, self.reserved) = struct.unpack("<IHH", content[:8])
+        self.domain = ctx.domains.get(domain)
         self.data = content[8:]
 
+        # Bugfixes in development
+        if self.domain is not None:
+            if self.domain.id == 1:
+                if len(self.data) == 46:
+                    self.data = array.array('H', [x for x in self.data]).tobytes()
+            elif self.domain.id == 4:
+                temps = array.array('h', self.data)
+                if temps[0] < 100:
+                    self.data = array.array('h', [t*10  for t in temps]).tobytes()
+
+
     def __str__(self):
-        if self.systemTimeRef == 0:
-            utc = ""
+        utc = f", {timestr(self.time.getUtc(self.systemTime))}" if self.time else ""
+        s = f"systemTime {self.systemTime}{utc}, domain {self.domain}"
+        if self.domain is None:
+            s += f", {len(self.data)} bytes"
         else:
-            utc = f", {timestr(self.systemTimeRef + (self.systemTime / 1000))}"
-        return f"systemTime {self.systemTime}{utc}, domain {self.domain}, {len(self.data)} bytes"
+            s += ": " + ", ".join(str(f.getValue(self.data)) for f in self.domain.fields)
+        return s
+
+    def fixup(self, ctx):
+        if self.time is None:
+            self.time = ctx.time
 
 
 class Exception(Entry):
@@ -164,8 +246,8 @@ class DataLog:
         blockCount = fileSize // BLOCK_SIZE
         if fileSize % BLOCK_SIZE != 0:
             print("WARNING! File size is not a multiple of block size")
-        print("File contains %u blocks" % blockCount)
 
+        entries = []
         ctx = Context()
         for b in range(blockCount):
             pos = f.tell()
@@ -174,12 +256,46 @@ class DataLog:
             print("@0x%08x size %u, %s, flags %02x, magic 0x%08x, sequence %u" % (pos, size, Kind(kind), flags, magic, sequence))
             if magic != MAGIC:
                 print("** BAD MAGIC")
+
             off = 12
             while off < BLOCK_SIZE:
+                print(f"{pos+off:#x}")
                 entry, size = Entry.read(block[off:], ctx)
                 off += alignup4(size)
-                if entry is not None:
-                    print(f"{str(entry.kind)}: {entry}")
+
+                if entry is None:
+                    continue
+
+                if entry.kind == Kind.time:
+                    ctx.time = entry
+                    # Iterate previous DATA records as timeref now known
+                    for e in reversed(entries):
+                        if e.kind == Kind.boot:
+                            break
+                        e.fixup(ctx)
+
+                entries.append(entry)
+
+        dataCount = 0
+
+        def printData():
+            if dataCount != 0:
+                print(f"Kind.data x {dataCount}")
+
+        for entry in entries:
+            # if entry.kind == Kind.data:
+            #     dataCount += 1
+            #     continue
+            # printData()
+            # dataCount = 0
+            print(f"{str(entry.kind)}: {entry}")
+            if entry.kind == Kind.data and entry.domain is not None:
+                for f in entry.domain.fields:
+                    print(f"{f.name} = {f.getValue(entry.data)}")
+                    
+        printData()
+
+        print(f"{len(entries)} entries found in {blockCount} blocks")
 
 
 def main():
