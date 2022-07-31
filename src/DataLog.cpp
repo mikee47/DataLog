@@ -241,7 +241,7 @@ DataLog::Entry::Domain::ID DataLog::writeDomain(const String& name)
 	Entry::Domain e{
 		.id = domainCount,
 	};
-	writeEntry(e);
+	writeEntry(e, name);
 	return e.id;
 }
 
