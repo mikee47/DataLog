@@ -23,13 +23,28 @@ class Kind(IntEnum):
 	exception = 7,  # Exception information
 	erased = 0xff,  # Erased
 
+
+def timestr(utc):
+    secs = int(utc)
+    ms = 1000 * (utc - secs)
+    s = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(secs))
+    s += ".%03u" % ms
+    return s
+
+
+class Context:
+    def __init__(self):
+        self.systemTimeRef = 0
+        self.domains = {}
+
+
 class Entry:
-    def __init__(self, kind, content):
+    def __init__(self, kind, content, ctx):
         self.kind = kind
         self.content = content
 
     @classmethod
-    def read(cls, arr, systemTimeRef):
+    def read(cls, arr, ctx):
         map = {
             Kind.boot: Boot,
             Kind.time: Time,
@@ -44,7 +59,7 @@ class Entry:
         if (flags & 0x01) != 0 or kind == Kind.pad:
             entry = None
         elif kind in map:
-            entry = map[kind](content, systemTimeRef)
+            entry = map[kind](content, ctx)
         else:
             entry = Entry(kind, content)
         return entry, 4 + entrySize
@@ -63,7 +78,7 @@ class Boot(Entry):
         DeepSleepAwake = 5,
         ExtSysReset = 6,
 
-    def __init__(self, content, systemTimeRef):
+    def __init__(self, content, ctx):
         self.kind = Kind.boot
         self.reason = content[0]
 
@@ -72,16 +87,17 @@ class Boot(Entry):
 
 
 class Time(Entry):
-    def __init__(self, content, systemTimeRef):
+    def __init__(self, content, ctx):
         self.kind = Kind.time
         (self.systemTime, self.utc) = struct.unpack("<II", content)
+        ctx.systemTimeRef = self.utc - (self.systemTime / 1000)
 
     def __str__(self):
-        return "systemTime %u, %s" % (self.systemTime, time.ctime(self.utc))
+        return "systemTime %u, %s" % (self.systemTime, timestr(self.utc))
 
 
 class Domain(Entry):
-    def __init__(self, content, systemTimeRef):
+    def __init__(self, content, ctx):
         self.kind = Kind.domain
         (self.id,) = struct.unpack("<H", content[:2])
         self.name = content[2:].decode()
@@ -95,7 +111,7 @@ class Field(Entry):
         Signed = 1,
         Float = 2,
 
-    def __init__(self, content, systemTimeRef):
+    def __init__(self, content, ctx):
         self.kind = Kind.field
         (self.id, self.type, self.size) = struct.unpack("<HBB", content[:4])
         self.name = content[4:].decode()
@@ -105,9 +121,9 @@ class Field(Entry):
 
 
 class Data(Entry):
-    def __init__(self, content, systemTimeRef):
+    def __init__(self, content, ctx):
         self.kind = Kind.data
-        self.systemTimeRef = systemTimeRef
+        self.systemTimeRef = ctx.systemTimeRef
         (self.systemTime, self.domain, self.reserved) = struct.unpack("<IHH", content[:8])
         self.data = content[8:]
 
@@ -115,12 +131,12 @@ class Data(Entry):
         if self.systemTimeRef == 0:
             utc = ""
         else:
-            utc = f", {time.ctime(self.systemTimeRef + (self.systemTime / 1000))}"
+            utc = f", {timestr(self.systemTimeRef + (self.systemTime / 1000))}"
         return f"systemTime {self.systemTime}{utc}, domain {self.domain}, {len(self.data)} bytes"
 
 
 class Exception(Entry):
-    def __init__(self, content, systemTimeRef):
+    def __init__(self, content, ctx):
         self.kind = Kind.exception
         (self.cause, self.epc1, self.epc2, self.epc3, self.excvaddr, self.depc) = struct.unpack("<6I", content[:24])
         self.stack = array.array("I", content[24:])
@@ -150,7 +166,7 @@ class DataLog:
             print("WARNING! File size is not a multiple of block size")
         print("File contains %u blocks" % blockCount)
 
-        systemTimeRef = 0
+        ctx = Context()
         for b in range(blockCount):
             pos = f.tell()
             block = f.read(BLOCK_SIZE)
@@ -160,54 +176,10 @@ class DataLog:
                 print("** BAD MAGIC")
             off = 12
             while off < BLOCK_SIZE:
-                entry, size = Entry.read(block[off:], systemTimeRef)
+                entry, size = Entry.read(block[off:], ctx)
                 off += alignup4(size)
-                if entry is None:
-                    continue
-                if entry.kind == Kind.time:
-                    systemTimeRef = entry.utc - (entry.systemTime / 1000)
-
-                print(f"{str(entry.kind)}: {entry}")
-
-                continue
-
-                (entrySize, kind, flags) = struct.unpack("<HBB", block[off:off+4])
-                line = "  @0x%08x size %4u, %s, flags %02x" % (off, entrySize, Kind(kind), flags)
-                off += 4
-                if (flags & 0x01) != 0:
-                    print("skipping %s" % line)
-                else:
-                    if kind == Kind.boot:
-                        reason = block[off]
-                        line += ", reason %s" % Boot.Reason(reason)
-                        systemTimeRef = 0
-                    elif kind == Kind.exception:
-                        (cause, epc1, epc2, epc3, excvaddr, depc) = struct.unpack("<6I", block[off:off+24])
-                        stack = array.array("I", block[off+24:off+entrySize])
-                        line += ", cause %u, epc1 0x%08x, epc2 0x%08x, epc3 0x%08x, excvaddr 0x%08x, depc 0x%08x, stack %u" % (cause, epc1, epc2, epc3, excvaddr, depc, len(stack))
-                        if len(stack) > 0:
-                            line += "\r\n"
-                            line += ", ".join(hex(e) for e in stack)
-                    elif kind == Kind.time:
-                        (systemTime, utc) = struct.unpack("<II", block[off:off+8])
-                        systemTimeRef = utc - (systemTime / 1000)
-                        line += ", systemTime %u, %s" % (systemTime, time.ctime(utc))
-                    elif kind == Kind.domain:
-                        (id,) = struct.unpack("<H", block[off:off+2])
-                        name = block[off+2:off+entrySize].decode()
-                        line += ", id %u, name '%s'" % (id, name)
-                    elif kind == Kind.field:
-                        (id, type, size) = struct.unpack("<HBB", block[off:off+4])
-                        name = block[off+4:off+entrySize].decode()
-                        line += ", id %u, %s(%u), name '%s'" % (id, Field.Type(type), size, name)
-                    elif kind == Kind.data:
-                        (systemTime, domain, reserved) = struct.unpack("<IHH", block[off:off+8])
-                        line += ", systemTime %u, %s, domain %u" % (systemTime, time.ctime(systemTimeRef + systemTime / 1000), domain)
-
-                    if kind in [Kind.boot, Kind.time, Kind.exception, Kind.pad]:
-                        print(line)
-
-                off += alignup4(entrySize)
+                if entry is not None:
+                    print(f"{str(entry.kind)}: {entry}")
 
 
 def main():
