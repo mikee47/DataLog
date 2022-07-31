@@ -121,18 +121,9 @@ class Domain(Entry):
         ctx.domain = self
         ctx.fieldOffset = 0
 
-        # Bugfixes in development
-        if self.name == '':
-            self.name = {
-                1: 'sunsynk/inverter',
-                2: "stsfan/inverter",
-                3: "meter/immersion",
-                4: "nt18b07/immersion"
-            }[self.id]
-
-
     def __str__(self):
         return "id %u, name '%s'" % (self.id, self.name)
+
 
 class Field(Entry):
     class Type(IntEnum):
@@ -148,11 +139,6 @@ class Field(Entry):
         self.name = content[4:].decode()
         self.offset = ctx.fieldOffset
         ctx.fieldOffset += self.size
-
-        # Bugfixes in development
-        if self.domain.name == 'nt18b07/immersion':
-            self.type = Field.Type.Signed
-
 
     def typestr(self):
         if self.type == Field.Type.Float:
@@ -191,18 +177,6 @@ class Data(Entry):
         (self.systemTime, domain, self.reserved) = struct.unpack("<IHH", content[:8])
         self.domain = ctx.domains.get(domain)
         self.data = content[8:]
-
-        # Bugfixes in development
-        if self.domain is not None:
-            self.domain.dataEntryCount += 1
-            if self.domain.id == 1:
-                if len(self.data) == 46:
-                    self.data = array.array('H', [x for x in self.data]).tobytes()
-            elif self.domain.id == 4:
-                temps = array.array('h', self.data)
-                if temps[0] < 100:
-                    self.data = array.array('h', [t*10  for t in temps]).tobytes()
-
 
     def __str__(self):
         utc = f", {timestr(self.time.getUtc(self.systemTime))}" if self.time else ""
