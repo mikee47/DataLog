@@ -13,15 +13,16 @@ BLOCK_SIZE = 16384
 MAGIC = 0xa78be044
 
 class Kind(IntEnum):
-	pad = 0,        # Unused padding
-	block = 1,      # Identifies start of block
-	boot = 2,       # System boot
-	time = 3,       # Contains RTC value and corresponding system time
-	domain = 4,     # Qualifies following fields (e.g. name of device)
-	field = 5,      # Field identification record
-	data = 6,       # Data record
-	exception = 7,  # Exception information
-	erased = 0xff,  # Erased
+    pad = 0,        # Unused padding
+    block = 1,      # Identifies start of block
+    boot = 2,       # System boot
+    time = 3,       # Contains RTC value and corresponding system time
+    domain = 4,     # Qualifies following fields (e.g. name of device)
+    field = 5,      # Field identification record
+    data = 6,       # Data record
+    exception = 7,  # Exception information
+    map = 8,        # Map of sequence numbers
+    erased = 0xff,  # Erased
 
 
 def timestr(utc):
@@ -48,6 +49,7 @@ class Entry:
             Kind.field: Field,
             Kind.data: Data,
             Kind.exception: Exception,
+            Kind.map: Map,
         }
 
         (entrySize, kind, flags) = struct.unpack("<HBB", arr[:4])
@@ -228,6 +230,15 @@ class Exception(Entry):
             s += "\r\n"
             s += ", ".join(f"{e:#010x}" for e in self.stack)
         return s
+
+
+class Map(Entry):
+    def __init__(self, content, ctx):
+        self.kind = Kind.map
+        self.map = array.array("I", content)
+
+    def __str__(self):
+        return ", ".join(str(e) for e in self.map)
 
 
 def alignup4(n):
