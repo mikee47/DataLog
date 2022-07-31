@@ -240,24 +240,31 @@ def alignup4(n):
     return (n + 3) & ~3
 
 class DataLog:
-    def __init__(self, filename):
-        self.load(filename)
+    def __init__(self):
+        self.sequence = 0
+        self.ctx = Context()
 
     def load(self, filename):
         f = open(filename, "rb")
         f.seek(0, os.SEEK_END)
         fileSize = f.tell()
         f.seek(0, os.SEEK_SET)
-        blockCount = fileSize // BLOCK_SIZE
         if fileSize % BLOCK_SIZE != 0:
             print("WARNING! File size is not a multiple of block size")
 
         entries = []
-        ctx = Context()
-        for b in range(blockCount):
+        dupes = 0
+        blockCount = 0
+        for b in range(fileSize // BLOCK_SIZE):
             pos = f.tell()
             block = f.read(BLOCK_SIZE)
             (size, kind, flags, magic, sequence) = struct.unpack("<HBBII", block[:12])
+            if sequence <= self.sequence:
+                dupes += 1
+                continue
+            self.sequence = sequence
+            blockCount += 1
+            prevSeq = sequence
             print("@0x%08x size %u, %s, flags %02x, magic 0x%08x, sequence %u" % (pos, size, Kind(kind), flags, magic, sequence))
             if magic != MAGIC:
                 print("** BAD MAGIC")
@@ -265,19 +272,19 @@ class DataLog:
             off = 12
             while off < BLOCK_SIZE:
                 # print(f"{pos+off:#x}")
-                entry, size = Entry.read(block[off:], ctx)
+                entry, size = Entry.read(block[off:], self.ctx)
                 off += alignup4(size)
 
                 if entry is None:
                     continue
 
                 if entry.kind == Kind.time:
-                    ctx.time = entry
+                    self.ctx.time = entry
                     # Iterate previous DATA records as timeref now known
                     for e in reversed(entries):
                         if e.kind == Kind.boot:
                             break
-                        e.fixup(ctx)
+                        e.fixup(self.ctx)
 
                 entries.append(entry)
 
@@ -300,19 +307,21 @@ class DataLog:
                     
         printData()
 
-        print(f"{len(entries)} entries found in {blockCount} blocks")
+        print(f"{len(entries)} entries found in {blockCount} new blocks, {dupes} skipped")
 
         print("Domains:")
-        for d in ctx.domains.values():
+        for d in self.ctx.domains.values():
             print(f"  {d.id} {d.name} {d.dataEntryCount} data records")
 
 
 def main():
     parser = argparse.ArgumentParser(description='DataLog tool')
-    parser.add_argument('input', help='Log file to read')
+    parser.add_argument('input', nargs='*', help='Log file to read')
 
     args = parser.parse_args()
-    log = DataLog(args.input)
+    log = DataLog()
+    for f in args.input:
+        log.load(f)
 
 
 if __name__ == "__main__":
