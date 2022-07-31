@@ -25,22 +25,13 @@ class Kind(IntEnum):
 
 
 def timestr(utc):
+    if utc is None:
+        return "?"
     secs = int(utc)
     ms = 1000 * (utc - secs)
     s = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(secs))
     s += ".%03u" % ms
     return s
-
-
-class Context:
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.time = None
-        self.domains = {}
-        self.domain = None
-        self.fieldOffset = 0
 
 
 class Entry:
@@ -71,7 +62,7 @@ class Entry:
                     entry = map[kind](content, ctx)
                 except (UnicodeDecodeError, IndexError) as err:
                     entry = None
-                    print(err)
+                    print(f"{type(err).__name__}: {err}")
             if entry is None:
                 entry = Entry(kind, content, ctx)
         return entry, 4 + entrySize
@@ -94,13 +85,16 @@ class Boot(Entry):
         ExtSysReset = 6,
 
     def __init__(self, content, ctx):
+        self.utc = None
         self.kind = Kind.boot
         self.reason = content[0]
         ctx.reset()
 
     def __str__(self):
-        return "reason %s" % Boot.Reason(self.reason)
+        return "reason %s, %s" % (Boot.Reason(self.reason), timestr(self.utc))
 
+    def fixup(self, ctx):
+        self.utc = ctx.time.getUtc(0)
 
 class Time(Entry):
     def __init__(self, content, ctx):
@@ -271,26 +265,31 @@ class BlockList(dict):
 
 class DataLog:
     def __init__(self):
-        self.sequence = 0
-        self.ctx = Context()
         self.entries = []
+        self.reset()
+
+    def reset(self):
+        self.time = None
+        self.domains = {}
+        self.domain = None
+        self.fieldOffset = 0
 
     def loadBlock(self, block):
         off = 0
         while off < len(block):
-            entry, size = Entry.read(block[off:], self.ctx)
+            entry, size = Entry.read(block[off:], self)
             off += alignup4(size)
 
             if entry is None:
                 continue
 
             if entry.kind == Kind.time:
-                self.ctx.time = entry
+                self.time = entry
                 # Iterate previous DATA records as timeref now known
                 for e in reversed(self.entries):
+                    e.fixup(self)
                     if e.kind == Kind.boot:
                         break
-                    e.fixup(self.ctx)
 
             self.entries.append(entry)
 
@@ -328,10 +327,6 @@ def main():
     printData()
 
     print(f"{len(log.entries)} entries loaded")
-
-    print("Domains:")
-    for d in log.ctx.domains.values():
-        print(f"  {d.id} {d.name} {d.dataEntryCount} data records")
 
 
 if __name__ == "__main__":
