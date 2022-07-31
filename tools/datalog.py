@@ -239,11 +239,7 @@ class Exception(Entry):
 def alignup4(n):
     return (n + 3) & ~3
 
-class DataLog:
-    def __init__(self):
-        self.sequence = 0
-        self.ctx = Context()
-
+class BlockList(dict):
     def load(self, filename):
         f = open(filename, "rb")
         f.seek(0, os.SEEK_END)
@@ -252,66 +248,51 @@ class DataLog:
         if fileSize % BLOCK_SIZE != 0:
             print("WARNING! File size is not a multiple of block size")
 
-        entries = []
         dupes = 0
         blockCount = 0
         for b in range(fileSize // BLOCK_SIZE):
             pos = f.tell()
             block = f.read(BLOCK_SIZE)
             (size, kind, flags, magic, sequence) = struct.unpack("<HBBII", block[:12])
-            if sequence <= self.sequence:
-                dupes += 1
-                continue
-            self.sequence = sequence
-            blockCount += 1
-            prevSeq = sequence
-            print("@0x%08x size %u, %s, flags %02x, magic 0x%08x, sequence %u" % (pos, size, Kind(kind), flags, magic, sequence))
             if magic != MAGIC:
                 print("** BAD MAGIC")
+                continue
+            if kind != Kind.block:
+                print("** BAD BLOCK kind")
+                continue
+            if sequence in self:
+                dupes += 1
+                continue
+            self[sequence] = block[12:]
+            blockCount += 1
 
-            off = 12
-            while off < BLOCK_SIZE:
-                # print(f"{pos+off:#x}")
-                entry, size = Entry.read(block[off:], self.ctx)
-                off += alignup4(size)
+        print(f"{os.path.basename(filename)}: {blockCount} new blocks, {dupes} dupes")
 
-                if entry is None:
-                    continue
 
-                if entry.kind == Kind.time:
-                    self.ctx.time = entry
-                    # Iterate previous DATA records as timeref now known
-                    for e in reversed(entries):
-                        if e.kind == Kind.boot:
-                            break
-                        e.fixup(self.ctx)
+class DataLog:
+    def __init__(self):
+        self.sequence = 0
+        self.ctx = Context()
+        self.entries = []
 
-                entries.append(entry)
+    def loadBlock(self, block):
+        off = 0
+        while off < len(block):
+            entry, size = Entry.read(block[off:], self.ctx)
+            off += alignup4(size)
 
-        dataCount = 0
+            if entry is None:
+                continue
 
-        def printData():
-            if dataCount != 0:
-                print(f"Kind.data x {dataCount}")
+            if entry.kind == Kind.time:
+                self.ctx.time = entry
+                # Iterate previous DATA records as timeref now known
+                for e in reversed(self.entries):
+                    if e.kind == Kind.boot:
+                        break
+                    e.fixup(self.ctx)
 
-        for entry in entries:
-            # if entry.kind == Kind.data:
-            #     dataCount += 1
-            #     continue
-            # printData()
-            # dataCount = 0
-            print(f"{str(entry.kind)}: {entry}")
-            if entry.kind == Kind.data and entry.domain is not None:
-                for f in entry.domain.fields:
-                    print(f"{f.name}[{f.id}] = {f.getValue(entry.data)}")
-                    
-        printData()
-
-        print(f"{len(entries)} entries found in {blockCount} new blocks, {dupes} skipped")
-
-        print("Domains:")
-        for d in self.ctx.domains.values():
-            print(f"  {d.id} {d.name} {d.dataEntryCount} data records")
+            self.entries.append(entry)
 
 
 def main():
@@ -319,9 +300,38 @@ def main():
     parser.add_argument('input', nargs='*', help='Log file to read')
 
     args = parser.parse_args()
-    log = DataLog()
+    blocks = BlockList()
     for f in args.input:
-        log.load(f)
+        blocks.load(f)
+
+    log = DataLog()
+    for b in sorted(blocks.keys()):
+        log.loadBlock(blocks[b])
+
+    dataCount = 0
+
+    def printData():
+        if dataCount != 0:
+            print(f"Kind.data x {dataCount}")
+
+    for entry in log.entries:
+        # if entry.kind == Kind.data:
+        #     dataCount += 1
+        #     continue
+        # printData()
+        # dataCount = 0
+        print(f"{str(entry.kind)}: {entry}")
+        if entry.kind == Kind.data and entry.domain is not None:
+            for f in entry.domain.fields:
+                print(f"{f.name}[{f.id}] = {f.getValue(entry.data)}")
+
+    printData()
+
+    print(f"{len(log.entries)} entries loaded")
+
+    print("Domains:")
+    for d in log.ctx.domains.values():
+        print(f"  {d.id} {d.name} {d.dataEntryCount} data records")
 
 
 if __name__ == "__main__":
