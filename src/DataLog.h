@@ -47,6 +47,7 @@ public:
 	XX(domain, 4, "Qualifies following fields (e.g. name of device)")                                                  \
 	XX(field, 5, "Field identification record")                                                                        \
 	XX(data, 6, "Data record")                                                                                         \
+	XX(exception, 7, "Exception information")                                                                          \
 	XX(erased, 0xff, "Erased")
 
 	/**
@@ -84,6 +85,8 @@ public:
          *
          */
 		struct Block {
+			static constexpr Kind kind{Kind::block};
+
 			uint32_t magic;
 			uint32_t sequence; ///< Always increments
 		};
@@ -92,13 +95,32 @@ public:
          * @brief System boot information
          */
 		struct Boot {
+			static constexpr Kind kind{Kind::boot};
+
 			uint8_t reason; ///< rst_reason
+		};
+
+		/**
+		 * @brief Exception information
+		 */
+		struct Exception {
+			static constexpr Kind kind{Kind::exception};
+
+			uint32_t cause;
+			uint32_t epc1;
+			uint32_t epc2;
+			uint32_t epc3;
+			uint32_t excvaddr;
+			uint32_t depc;
+			uint8_t stack[];
 		};
 
 		/**
          * @brief Written on restart, at midnight and when RTC clock is updated.
          */
 		struct Time {
+			static constexpr Kind kind{Kind::time};
+
 			SystemTime systemTime;
 			TimeStamp time;
 		};
@@ -107,6 +129,7 @@ public:
          * @brief A domain identifies a data set
          */
 		struct Domain {
+			static constexpr Kind kind{Kind::domain};
 			using ID = uint16_t;
 			ID id;		 ///< Identifier
 			char name[]; ///< e.g. name of device, no NUL
@@ -118,6 +141,8 @@ public:
          * @brief A field descriptor
          */
 		struct Field {
+			static constexpr Kind kind{Kind::field};
+
 			using ID = uint16_t;
 			enum class Type : uint8_t {
 				Unsigned,
@@ -137,6 +162,8 @@ public:
          * @brief A set of data entries
          */
 		struct Data {
+			static constexpr Kind kind{Kind::data};
+
 			SystemTime systemTime;
 			Domain::ID domain; ///< Identifies which domain this data is for
 			uint16_t reserved;
@@ -191,7 +218,18 @@ public:
 	/**
 	 * @brief Write an Entry of any kind.
 	 */
-	bool writeEntry(Entry::Kind kind, const void* data, uint16_t length);
+	bool writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const void* data = nullptr,
+					uint16_t dataLength = 0);
+	bool writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const String& data)
+	{
+		return writeEntry(kind, info, infoLength, data.c_str(), data.length());
+	}
+
+	template <typename Info, typename... Args>
+	typename std::enable_if<std::is_class<Info>::value, bool>::type writeEntry(const Info& info, Args... args)
+	{
+		return writeEntry(Info::kind, &info, sizeof(info), args...);
+	}
 
 	int read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSize);
 

@@ -127,7 +127,7 @@ bool DataLog::init(Storage::Partition partition)
 	Entry::Boot boot{
 		.reason = uint8_t(system_get_rst_info()->reason),
 	};
-	writeEntry(Entry::Kind::boot, &boot, sizeof(boot));
+	writeEntry(boot);
 
 	// All blocks read
 	return true;
@@ -143,13 +143,13 @@ DataLog::SystemTime DataLog::getSystemTime()
 	return ticks / 1000;
 }
 
-bool DataLog::writeEntry(Entry::Kind kind, const void* data, uint16_t length)
+bool DataLog::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const void* data, uint16_t dataLength)
 {
 	if(!isReady) {
 		return false;
 	}
 
-	auto entrySize = sizeof(Entry::Header) + length;
+	auto entrySize = sizeof(Entry::Header) + infoLength + dataLength;
 	auto space = blockSize - (writeOffset % blockSize);
 	if(space < entrySize) {
 		// No room in page, skip to next one
@@ -208,16 +208,17 @@ bool DataLog::writeEntry(Entry::Kind kind, const void* data, uint16_t length)
 	}
 
 	Entry::Header header{
-		.size = length,
+		.size = uint16_t(infoLength + dataLength),
 		.kind = kind,
 		.flags = 0xff,
 	};
 	debug_i("[DL] > %s %u @ 0x%08x", toString(header.kind).c_str(), header.size, writeOffset);
 	partition.write(writeOffset, &header, sizeof(header));
-	partition.write(writeOffset + sizeof(header), data, length);
+	partition.write(writeOffset + sizeof(header), info, infoLength);
+	partition.write(writeOffset + sizeof(header) + infoLength, data, dataLength);
 	header.flags[Entry::Flag::invalid] = false;
 	partition.write(writeOffset, &header, sizeof(header));
-	writeOffset += sizeof(header) + length;
+	writeOffset += sizeof(header) + infoLength + dataLength;
 
 	// Entries always start on a word boundary
 	writeOffset = ALIGNUP4(writeOffset);
@@ -231,49 +232,36 @@ bool DataLog::writeTime()
 		.systemTime = getSystemTime(),
 		.time = {uint32_t(IFS::fsGetTimeUTC())},
 	};
-	return writeEntry(DataLog::Entry::Kind::time, &e, sizeof(e));
+	return writeEntry(e);
 }
 
 DataLog::Entry::Domain::ID DataLog::writeDomain(const String& name)
 {
 	++domainCount;
-	auto namelen = name.length();
-	auto bufSize = sizeof(Entry::Domain) + namelen;
-	uint8_t buffer[bufSize];
-	auto e = new(buffer) Entry::Domain{
+	Entry::Domain e{
 		.id = domainCount,
 	};
-	memcpy(e->name, name.c_str(), namelen);
-	writeEntry(Entry::Kind::domain, buffer, bufSize);
-	return e->id;
+	writeEntry(e);
+	return e.id;
 }
 
 bool DataLog::writeField(uint16_t id, Entry::Field::Type type, uint8_t size, const String& name)
 {
-	auto namelen = name.length();
-	auto bufSize = sizeof(Entry::Field) + namelen;
-	uint8_t buffer[bufSize];
-	auto e = new(buffer) Entry::Field{
+	Entry::Field e{
 		.id = id,
 		.type = type,
 		.size = size,
 	};
-	if(namelen != 0) {
-		memcpy(e->name, name.c_str(), namelen);
-	}
-	return writeEntry(Entry::Kind::field, buffer, bufSize);
+	return writeEntry(e, name);
 }
 
 bool DataLog::writeData(uint16_t domain, const void* data, uint16_t length)
 {
-	auto bufSize = sizeof(Entry::Data) + length;
-	uint8_t buffer[bufSize];
-	auto* e = new(buffer) Entry::Data{
+	Entry::Data e{
 		.systemTime = getSystemTime(),
 		.domain = domain,
 	};
-	memcpy(e->data, data, length);
-	return writeEntry(Entry::Kind::data, buffer, bufSize);
+	return writeEntry(e, data, length);
 }
 
 int DataLog::read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSize)
