@@ -66,7 +66,7 @@ class Entry:
             pass
         else:
             if kind in map:
-                print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
+                # print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
                 try:
                     entry = map[kind](content, ctx)
                 except (UnicodeDecodeError, IndexError) as err:
@@ -120,6 +120,7 @@ class Domain(Entry):
         (self.id,) = struct.unpack("<H", content[:2])
         self.name = content[2:].decode()
         self.fields = []
+        self.dataEntryCount = 0
         ctx.domains[self.id] = self
         ctx.domain = self
         ctx.fieldOffset = 0
@@ -197,6 +198,7 @@ class Data(Entry):
 
         # Bugfixes in development
         if self.domain is not None:
+            self.domain.dataEntryCount += 1
             if self.domain.id == 1:
                 if len(self.data) == 46:
                     self.data = array.array('H', [x for x in self.data]).tobytes()
@@ -262,7 +264,7 @@ class DataLog:
 
             off = 12
             while off < BLOCK_SIZE:
-                print(f"{pos+off:#x}")
+                # print(f"{pos+off:#x}")
                 entry, size = Entry.read(block[off:], ctx)
                 off += alignup4(size)
 
@@ -294,11 +296,15 @@ class DataLog:
             print(f"{str(entry.kind)}: {entry}")
             if entry.kind == Kind.data and entry.domain is not None:
                 for f in entry.domain.fields:
-                    print(f"{f.name} = {f.getValue(entry.data)}")
+                    print(f"{f.name}[{f.id}] = {f.getValue(entry.data)}")
                     
         printData()
 
         print(f"{len(entries)} entries found in {blockCount} blocks")
+
+        print("Domains:")
+        for d in ctx.domains.values():
+            print(f"  {d.id} {d.name} {d.dataEntryCount} data records")
 
 
 def main():
