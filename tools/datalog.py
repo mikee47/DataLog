@@ -67,8 +67,11 @@ class Entry:
         else:
             if kind in map:
                 print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
-                if kind != Kind.field or ctx.domain is not None:
+                try:
                     entry = map[kind](content, ctx)
+                except (UnicodeDecodeError, IndexError) as err:
+                    entry = None
+                    print(err)
             if entry is None:
                 entry = Entry(kind, content, ctx)
         return entry, 4 + entrySize
