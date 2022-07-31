@@ -176,7 +176,7 @@ bool DataLog::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength
 				// Retire this block
 				debug_i("[DL] Retire block #%u seq %u", startBlock.number, startBlock.sequence);
 				++startBlock.number;
-				startBlock.number %= blockCount;
+				startBlock.number %= totalBlocks;
 				++startBlock.sequence;
 				--blockCount;
 			}
