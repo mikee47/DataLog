@@ -48,6 +48,7 @@ public:
 	XX(field, 5, "Field identification record")                                                                        \
 	XX(data, 6, "Data record")                                                                                         \
 	XX(exception, 7, "Exception information")                                                                          \
+	XX(map, 8, "Map of block sequence numbers")                                                                        \
 	XX(erased, 0xff, "Erased")
 
 	/**
@@ -89,6 +90,15 @@ public:
 
 			uint32_t magic;
 			uint32_t sequence; ///< Always increments
+		};
+
+		/**
+         * @brief Map of blocks
+         */
+		struct Map {
+			static constexpr Kind kind{Kind::map};
+
+			// uint32_t seq[]; ///< Sequence numbers of blocks
 		};
 
 		/**
@@ -285,7 +295,6 @@ private:
 	uint32_t writeOffset;   ///< Write offset from start of log
 	uint16_t blockSize;
 	uint16_t totalBlocks; ///< Total number of blocks in partition
-	uint16_t blockCount;  ///< Number of used blocks (final one may be partial)
 	bool isReady{false};
 	static uint32_t prevTicks; ///< Used by `getSystemTime` to identify wrapping
 	static uint16_t domainCount;

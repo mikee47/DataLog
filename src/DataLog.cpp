@@ -53,6 +53,16 @@ bool DataLog::init(Storage::Partition partition)
 		return false;
 	}
 
+	struct S {
+		Entry::Header header;
+		Entry::Block block;
+
+		bool isValid() const
+		{
+			return header.size == sizeof(block) && header.kind == Entry::Kind::block && block.magic == magic;
+		}
+	};
+
 	/*
      * Make some assumptions for simplicity. We can improve this later:
      *
@@ -65,46 +75,53 @@ bool DataLog::init(Storage::Partition partition)
      * - if there are no blocks marked, the log is empty
      * - block with the oldest number is the startBlock
      * - search last block to determine the write offset
+	 *
+	 *
+	 * Possible arrangements:
+	 *
+	 * Partially filled:
+	 *	[start] ... [end] [erased]...
+	 * All blocks used, new block init incomplete:
+	 *	[erased] [start] ... [end]
+	 *	[end] [erased] [start] ...
+	 * All blocks used:
+	 *	[start] ... [end]
+	 *	[end] [start] ...
      */
-	blockCount = 0;
-	writeOffset = 0;
-	startBlock = BlockInfo{};
-	endBlock = BlockInfo{};
+	uint32_t sequences[totalBlocks]{};
 	for(unsigned block = 0; block < totalBlocks; ++block) {
-		struct S {
-			Entry::Header header;
-			Entry::Block block;
-		};
-		S s;
+		S s{};
 		partition.read(block * blockSize, &s, sizeof(s));
-		if(s.header.kind != Entry::Kind::block) {
-			// End of used blocks
-			if(s.header.kind == Entry::Kind::erased) {
-				break;
-			}
-
-			debug_e("[DL] Bad block entry");
-			return false;
-		}
-
-		if(s.block.magic != magic) {
-			debug_e("[DL] Bad block magic");
-			return false;
-		}
-
-		debug_i("[DL] blk #%u seq %u @ 0x%08x", block, s.block.sequence, block * blockSize);
-
-		++blockCount;
-		if(s.block.sequence > endBlock.sequence) {
-			endBlock.number = block;
-			endBlock.sequence = s.block.sequence;
-		}
-		if(startBlock.sequence == 0 || s.block.sequence < startBlock.sequence) {
-			startBlock.number = block;
-			startBlock.sequence = s.block.sequence;
+		debug_i("[DL] 0x%08x blk #%u seq %u", block * blockSize, block, s.block.sequence);
+		if(s.isValid()) {
+			sequences[block] = s.block.sequence;
 		}
 	}
 
+	// Find maximum block sequence
+	endBlock = BlockInfo{};
+	for(unsigned block = 0; block < totalBlocks; ++block) {
+		auto seq = sequences[block];
+		if(seq > endBlock.sequence) {
+			endBlock.number = block;
+			endBlock.sequence = seq;
+		}
+	}
+
+	// Scan backwards to find start point
+	S s;
+	auto block = endBlock;
+	do {
+		startBlock = block;
+		if(block.number == 0) {
+			block.number = totalBlocks - 1;
+		} else {
+			--block.number;
+		}
+		--block.sequence;
+	} while(block.sequence == sequences[block.number]);
+
+	// Scan end block for write position
 	writeOffset = endBlock.number * blockSize;
 	auto endOffset = writeOffset + blockSize;
 	do {
@@ -124,6 +141,9 @@ bool DataLog::init(Storage::Partition partition)
 	debug_i("[DL] writeOffset = 0x%08x", writeOffset);
 
 	isReady = true;
+
+	writeEntry(Entry::Kind::map, sequences, totalBlocks * sizeof(sequences[0]));
+
 	Entry::Boot boot{
 		.reason = uint8_t(system_get_rst_info()->reason),
 	};
@@ -178,7 +198,6 @@ bool DataLog::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength
 				++startBlock.number;
 				startBlock.number %= totalBlocks;
 				++startBlock.sequence;
-				--blockCount;
 			}
 		}
 
@@ -204,7 +223,6 @@ bool DataLog::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength
 		};
 		partition.write(writeOffset, &s, sizeof(s));
 		writeOffset += sizeof(s);
-		++blockCount;
 	}
 
 	Entry::Header header{
