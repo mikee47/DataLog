@@ -297,6 +297,7 @@ private:
 	uint16_t totalBlocks; ///< Total number of blocks in partition
 	bool isReady{false};
 	static uint32_t prevTicks; ///< Used by `getSystemTime` to identify wrapping
+	static uint32_t highTicks; ///< Microseconds overflow
 	static uint16_t domainCount;
 };
 

@@ -32,6 +32,7 @@ DEFINE_FSTR_MAP(kindTags, DataLog::Entry::Kind, FlashString, DATALOG_ENTRY_KIND_
 }; // namespace
 
 uint32_t DataLog::prevTicks;
+uint32_t DataLog::highTicks;
 uint16_t DataLog::domainCount;
 
 String toString(DataLog::Entry::Kind kind)
@@ -155,12 +156,13 @@ bool DataLog::init(Storage::Partition partition)
 
 DataLog::SystemTime DataLog::getSystemTime()
 {
-	uint64_t ticks = micros();
-	if(ticks < prevTicks) {
-		ticks += 0xffffffffULL;
+	uint32_t ticks = micros();
+	if(ticks < uint32_t(prevTicks)) {
+		++highTicks;
 	}
 	prevTicks = ticks;
-	return ticks / 1000;
+
+	return ((uint64_t(highTicks) << 32) + ticks) / 1000;
 }
 
 bool DataLog::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const void* data, uint16_t dataLength)
