@@ -34,12 +34,8 @@ def timestr(utc):
 
 
 class Entry:
-    def __init__(self, kind, content, ctx):
-        self.kind = kind
-        self.content = content
-
     @classmethod
-    def read(cls, arr, ctx):
+    def read(cls, block, offset, ctx):
         map = {
             Kind.boot: Boot,
             Kind.time: Time,
@@ -50,28 +46,41 @@ class Entry:
             Kind.map: Map,
         }
 
-        (entrySize, kind, flags) = struct.unpack("<HBB", arr[:4])
-        content = arr[4:4+entrySize]
         entry = None
-        if flags != 0xfe or kind == Kind.pad:
-            return None, -1
+        (entrySize, kind, flags) = struct.unpack("<HBB", block.content[offset:offset+4])
+        if kind == Kind.pad:
+            return None, 0
 
-        if kind in map:
-            # print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
-            try:
-                entry = map[kind](content, ctx)
-            except (UnicodeDecodeError, IndexError, struct.error) as err:
-                entry = None
-                print(f"{type(err).__name__}: {err}")
-        if entry is None:
-            entry = Entry(kind, content, ctx)
+        content = block.content[offset+4:offset+4+entrySize]
+        if flags == 0xfe:
+            if kind in map:
+                # print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
+                try:
+                    entry = map[kind](content, ctx)
+                except (UnicodeDecodeError, IndexError, struct.error) as err:
+                    entry = None
+                    print(f"seq {block.sequence:#x} @{offset:#010x} {str(Kind(kind))}, size {entrySize}, flags {flags}, {type(err).__name__}: {err}")
+            if entry is None:
+                entry = UnknownEntry(kind, content, ctx)
+        elif flags != 0xff:
+            print(f"Corrupt block {block.sequence:#x}, skipping from offset {offset:#x}")
+            return None, 0
         return entry, 4 + entrySize
+
+    def isValid(self):
+        return True
 
     def __str__(self):
         return "%u bytes" % len(self.content)
 
     def fixup(self, ctx):
         pass
+
+
+class UnknownEntry(Entry):
+    def __init__(self, kind, content, ctx):
+        self.kind = kind
+        self.content = content
 
 
 class Boot(Entry):
@@ -218,7 +227,7 @@ class Map(Entry):
         self.map = array.array("I", content)
 
     def __str__(self):
-        return ", ".join(str(e) for e in self.map)
+        return ", ".join(f"{e:#x}" for e in self.map)
 
 
 def alignup4(n):
@@ -234,6 +243,7 @@ class Block:
         b = Block()
         b.header = data[:12]
         (b.size, b.kind, b.flags, b.magic, b.sequence) = struct.unpack("<HBBII", b.header)
+        print(f"Block {b.sequence:#010x}, size {b.size}, {str(Kind(b.kind))}, magic {b.magic:#010x}")
         if b.magic != Block.MAGIC:
             print("** BAD MAGIC")
             return None
@@ -274,7 +284,7 @@ class BlockList(dict):
     def append(self, block):
         self[block.sequence] = block
 
-    def saveToFile(filename):
+    def saveToFile(self, filename):
         with open(filename, "wb") as f:
             for b in sorted(self):
                 block = self[b]
@@ -306,10 +316,11 @@ class DataLog:
         off = 0
         while off < len(block.content):
             # print(f"offset {12+off:#x}: {' '.join(hex(x) for x in block.content[off:off+8])}")
-            entry, size = Entry.read(block.content[off:], self)
-            if size < 0:
-                print(f"Skipping block {block.sequence:#x} from offset {off:#x}")
+            entry, size = Entry.read(block, off, self)
+            if size <= 0:
+                # Can't read any more from this block
                 break
+
             off += alignup4(size)
 
             if entry is None:
@@ -342,8 +353,9 @@ def main():
         cur = seq[0]
         for n in seq[1:]:
             cur += 1
-            if n != cur:
+            while n != cur:
                 print(f"Missing {cur:#x}")
+                cur += 1
         lastBlock = seq[len(seq)-1]
         print(f"lastBlock {lastBlock} ({lastBlock:#x})")
         # print("\r\n".join(str(n) for n in seq))
@@ -355,10 +367,9 @@ def main():
     rsp = conn.getresponse()
     print(rsp.status, rsp.reason)
     data = rsp.read()
-    if len(data) == 0:
-        print("No new blocks received")
-    else:
-        with open(f"logs/datalog-{block:#010x}.bin", "wb") as f:
+    print(f"{len(data)} bytes received")
+    if len(data) != 0:
+        with open("logs/datalog-%08x.bin" % block, "wb") as f:
             f.write(data)
         newBlockCount = 0
         off = 0
