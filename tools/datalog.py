@@ -8,9 +8,7 @@
 import os, json, sys, struct, time, array
 import argparse
 from enum import IntEnum
-
-BLOCK_SIZE = 16384
-MAGIC = 0xa78be044
+import http.client
 
 class Kind(IntEnum):
     pad = 0,        # Unused padding
@@ -55,18 +53,18 @@ class Entry:
         (entrySize, kind, flags) = struct.unpack("<HBB", arr[:4])
         content = arr[4:4+entrySize]
         entry = None
-        if (flags & 0x01) != 0 or kind == Kind.pad:
-            pass
-        else:
-            if kind in map:
-                # print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
-                try:
-                    entry = map[kind](content, ctx)
-                except (UnicodeDecodeError, IndexError) as err:
-                    entry = None
-                    print(f"{type(err).__name__}: {err}")
-            if entry is None:
-                entry = Entry(kind, content, ctx)
+        if flags != 0xfe or kind == Kind.pad:
+            return None, -1
+
+        if kind in map:
+            print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
+            try:
+                entry = map[kind](content, ctx)
+            except (UnicodeDecodeError, IndexError, struct.error) as err:
+                entry = None
+                print(f"{type(err).__name__}: {err}")
+        if entry is None:
+            entry = Entry(kind, content, ctx)
         return entry, 4 + entrySize
 
     def __str__(self):
@@ -134,11 +132,11 @@ class Field(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.field
         self.domain = ctx.domain
-        self.domain.fields.append(self)
         (self.id, self.type, self.size) = struct.unpack("<HBB", content[:4])
         self.name = content[4:].decode()
         self.offset = ctx.fieldOffset
         ctx.fieldOffset += self.size
+        self.domain.fields.append(self)
 
     def typestr(self):
         if self.type == Field.Type.Float:
@@ -162,7 +160,12 @@ class Field(Entry):
                 1: "b", 2: "h", 4: "i", 8: "q"
             }
         }
-        fmt = "<" + map[self.type][self.size]
+        try:
+            fmt = "<" + map[self.type][self.size]
+        except:
+            print(self.__dict__)
+            print(f"type {self.type}, size {self.size}, name {self.name}")
+            raise
         (value,) = struct.unpack(fmt, data[self.offset:self.offset+self.size])
         return round(value, 3)
 
@@ -218,34 +221,60 @@ class Map(Entry):
 def alignup4(n):
     return (n + 3) & ~3
 
+
+class Block:
+    SIZE = 16384
+    MAGIC = 0xa78be044
+
+    @classmethod
+    def parse(cls, data):
+        b = Block()
+        b.header = data[:12]
+        (b.size, b.kind, b.flags, b.magic, b.sequence) = struct.unpack("<HBBII", b.header)
+        if b.magic != Block.MAGIC:
+            print("** BAD MAGIC")
+            return None
+        if b.kind != Kind.block:
+            print("** BAD BLOCK kind")
+            return None
+        b.content = data[12:]
+        return b
+
+    def __str__(self):
+        return f"{self.sequence:#010x} {Kind(self.kind)}, {self.flags:#02x}, {self.magic:#08x}"
+
+
 class BlockList(dict):
     def load(self, filename):
         f = open(filename, "rb")
         f.seek(0, os.SEEK_END)
         fileSize = f.tell()
         f.seek(0, os.SEEK_SET)
-        if fileSize % BLOCK_SIZE != 0:
+        if fileSize % Block.SIZE != 0:
             print("WARNING! File size is not a multiple of block size")
 
         dupes = 0
         blockCount = 0
-        for b in range(fileSize // BLOCK_SIZE):
+        for b in range(fileSize // Block.SIZE):
             pos = f.tell()
-            block = f.read(BLOCK_SIZE)
-            (size, kind, flags, magic, sequence) = struct.unpack("<HBBII", block[:12])
-            if magic != MAGIC:
-                print("** BAD MAGIC")
+            block = Block.parse(f.read(Block.SIZE))
+            if block is None:
                 continue
-            if kind != Kind.block:
-                print("** BAD BLOCK kind")
-                continue
-            if sequence in self:
+            if block.sequence in self:
                 dupes += 1
                 continue
-            self[sequence] = block[12:]
+            self.append(block)
             blockCount += 1
 
         print(f"{os.path.basename(filename)}: {blockCount} new blocks, {dupes} dupes")
+
+    def append(self, block):
+        self[block.sequence] = block
+
+    def save(filename):
+        f = open(filename, "wb")
+        # for b in sorted(self):
+
 
 
 class DataLog:
@@ -261,8 +290,12 @@ class DataLog:
 
     def loadBlock(self, block):
         off = 0
-        while off < len(block):
-            entry, size = Entry.read(block[off:], self)
+        while off < len(block.content):
+            print(f"offset {12+off:#x}: {' '.join(hex(x) for x in block.content[off:off+8])}")
+            entry, size = Entry.read(block.content[off:], self)
+            if size < 0:
+                print(f"Skipping block {block.sequence:#x} from offset {off:#x}")
+                break
             off += alignup4(size)
 
             if entry is None:
@@ -288,8 +321,37 @@ def main():
     for f in args.input:
         blocks.load(f)
 
+    seq = sorted(blocks.keys())
+    if len(seq) != 0:
+        cur = seq[0]
+        for n in seq[1:]:
+            cur += 1
+            if n != cur:
+                print(f"Missing {cur:#x}")
+
+        # print("\r\n".join(str(n) for n in seq))
+
+        lastBlock = seq[len(seq)-1]
+        conn = http.client.HTTPConnection("192.168.1.115",  timeout=10)
+        print(f"lastBlock {lastBlock} ({lastBlock:#x})")
+        conn.request("GET", f"/datalog?start={lastBlock+1}")
+        rsp = conn.getresponse()
+        print(rsp.status, rsp.reason)
+        while chunk := rsp.read(Block.SIZE):
+            block = Block.parse(chunk)
+            if block is None:
+                continue
+            print(block)
+            blocks.append(block)
+            
+
+    # return  ###
+
+
     log = DataLog()
-    for b in sorted(blocks.keys()):
+    seq = sorted(blocks.keys())
+    for b in seq:
+        print(f"Block {str(blocks[b])}")
         log.loadBlock(blocks[b])
 
     dataCount = 0
