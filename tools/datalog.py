@@ -57,7 +57,7 @@ class Entry:
             return None, -1
 
         if kind in map:
-            print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
+            # print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
             try:
                 entry = map[kind](content, ctx)
             except (UnicodeDecodeError, IndexError, struct.error) as err:
@@ -291,7 +291,7 @@ class DataLog:
     def loadBlock(self, block):
         off = 0
         while off < len(block.content):
-            print(f"offset {12+off:#x}: {' '.join(hex(x) for x in block.content[off:off+8])}")
+            # print(f"offset {12+off:#x}: {' '.join(hex(x) for x in block.content[off:off+8])}")
             entry, size = Entry.read(block.content[off:], self)
             if size < 0:
                 print(f"Skipping block {block.sequence:#x} from offset {off:#x}")
@@ -322,34 +322,50 @@ def main():
         blocks.load(f)
 
     seq = sorted(blocks.keys())
-    if len(seq) != 0:
+    if len(seq) == 0:
+        lastBlock = 0
+    else:
         cur = seq[0]
         for n in seq[1:]:
             cur += 1
             if n != cur:
                 print(f"Missing {cur:#x}")
-
+        lastBlock = seq[len(seq)-1]
+        print(f"lastBlock {lastBlock} ({lastBlock:#x})")
         # print("\r\n".join(str(n) for n in seq))
 
-        lastBlock = seq[len(seq)-1]
-        conn = http.client.HTTPConnection("192.168.1.115",  timeout=10)
-        print(f"lastBlock {lastBlock} ({lastBlock:#x})")
-        conn.request("GET", f"/datalog?start={lastBlock+1}")
-        rsp = conn.getresponse()
-        print(rsp.status, rsp.reason)
-        while chunk := rsp.read(Block.SIZE):
-            block = Block.parse(chunk)
+
+    conn = http.client.HTTPConnection("192.168.1.115",  timeout=10)
+    block = lastBlock + 1
+    conn.request("GET", f"/datalog?start={block}")
+    rsp = conn.getresponse()
+    print(rsp.status, rsp.reason)
+    data = rsp.read()
+    if len(data) == 0:
+        print("No new blocks received")
+    else:
+        with open(f"logs/datalog-{block:#010x}.bin", "wb") as f:
+            f.write(data)
+        newBlockCount = 0
+        off = 0
+        while off < len(data):
+            block = Block.parse(data[off:off+Block.SIZE])
+            off += Block.SIZE
             if block is None:
                 continue
             print(block)
             blocks.append(block)
-            
+            newBlockCount += 1
 
-    # return  ###
+        seq = sorted(blocks.keys())
+        with open("archive.bin", "wb") as f:
+            for b in seq:
+                block = blocks[b]
+                f.write(block.header)
+                f.write(block.content)
 
 
     log = DataLog()
-    seq = sorted(blocks.keys())
     for b in seq:
         print(f"Block {str(blocks[b])}")
         log.loadBlock(blocks[b])
