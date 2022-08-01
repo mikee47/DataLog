@@ -248,7 +248,7 @@ class Block:
 
 
 class BlockList(dict):
-    def load(self, filename):
+    def loadFromFile(self, filename):
         f = open(filename, "rb")
         f.seek(0, os.SEEK_END)
         fileSize = f.tell()
@@ -333,7 +333,7 @@ def main():
     args = parser.parse_args()
     blocks = BlockList()
     for f in args.input:
-        blocks.load(f)
+        blocks.loadFromFile(f)
 
     seq = sorted(blocks.keys())
     if len(seq) == 0:
