@@ -29,6 +29,16 @@ DATALOG_ENTRY_KIND_MAP(XX)
 DEFINE_FSTR_MAP(kindTags, DataLog::Entry::Kind, FlashString, DATALOG_ENTRY_KIND_MAP(XX))
 #undef XX
 
+struct BlockStart {
+	DataLog::Entry::Header header;
+	DataLog::Entry::Block block;
+
+	bool isValid() const
+	{
+		return header.size == sizeof(block) && header.kind == DataLog::Entry::Kind::block && block.magic == magic;
+	}
+};
+
 }; // namespace
 
 uint32_t DataLog::prevTicks;
@@ -53,16 +63,6 @@ bool DataLog::init(Storage::Partition partition)
 	if(!partition || blockSize == 0) {
 		return false;
 	}
-
-	struct S {
-		Entry::Header header;
-		Entry::Block block;
-
-		bool isValid() const
-		{
-			return header.size == sizeof(block) && header.kind == Entry::Kind::block && block.magic == magic;
-		}
-	};
 
 	/*
      * Make some assumptions for simplicity. We can improve this later:
@@ -91,7 +91,7 @@ bool DataLog::init(Storage::Partition partition)
      */
 	uint32_t sequences[totalBlocks]{};
 	for(unsigned block = 0; block < totalBlocks; ++block) {
-		S s{};
+		BlockStart s{};
 		partition.read(block * blockSize, &s, sizeof(s));
 		debug_i("[DL] 0x%08x blk #%u seq %u", block * blockSize, block, s.block.sequence);
 		if(s.isValid()) {
@@ -110,7 +110,7 @@ bool DataLog::init(Storage::Partition partition)
 	}
 
 	// Scan backwards to find start point
-	S s;
+	BlockStart s;
 	auto block = endBlock;
 	do {
 		startBlock = block;
@@ -206,11 +206,7 @@ bool DataLog::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength
 		// Initialise the block
 		debug_i("[DL] Initialise block #%u seq %u @ 0x%08x", endBlock.number, endBlock.sequence, writeOffset);
 		partition.erase_range(writeOffset, blockSize);
-		struct S {
-			Entry::Header header;
-			Entry::Block block;
-		};
-		S s{
+		BlockStart s{
 			.header =
 				{
 					.size = uint16_t(sizeof(Entry::Block)),
