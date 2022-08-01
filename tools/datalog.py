@@ -274,10 +274,12 @@ class BlockList(dict):
     def append(self, block):
         self[block.sequence] = block
 
-    def save(filename):
-        f = open(filename, "wb")
-        # for b in sorted(self):
-
+    def saveToFile(filename):
+        with open(filename, "wb") as f:
+            for b in sorted(self):
+                block = self[b]
+                f.write(block.header)
+                f.write(block.content)
 
 
 class DataLog:
@@ -369,12 +371,7 @@ def main():
             blocks.append(block)
             newBlockCount += 1
 
-        seq = sorted(blocks.keys())
-        with open("archive.bin", "wb") as f:
-            for b in seq:
-                block = blocks[b]
-                f.write(block.header)
-                f.write(block.content)
+        blocks.saveToFile("archive.bin")
 
 
     log = DataLog()
