@@ -27,9 +27,7 @@
 class DataLogReader : public IDataSourceStream
 {
 public:
-	DataLogReader(DataLog& log, unsigned startBlock, unsigned blockCount)
-		: log(log), startBlock(startBlock), blockCount(blockCount), size(blockCount * log.getBlockSize())
-
+	DataLogReader(DataLog& log, unsigned startBlock) : log(log), startBlock(startBlock)
 	{
 	}
 
@@ -50,9 +48,6 @@ public:
 private:
 	DataLog& log;
 	uint16_t startBlock;
-	uint16_t blockCount;
-	uint16_t blockOffset{0};
 	uint32_t readPos{0};
-	uint32_t size;
 	bool done{false};
 };
