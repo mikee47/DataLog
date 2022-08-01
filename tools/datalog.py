@@ -100,6 +100,7 @@ class Time(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.time
         (self.systemTime, self.utc) = struct.unpack("<II", content)
+        self.systemTime = ctx.checkTime(self.systemTime)
 
     def __str__(self):
         return "systemTime %u, %s" % (self.systemTime, timestr(self.utc))
@@ -180,6 +181,8 @@ class Data(Entry):
         (self.systemTime, domain, self.reserved) = struct.unpack("<IHH", content[:8])
         self.domain = ctx.domains.get(domain)
         self.data = content[8:]
+
+        self.systemTime = ctx.checkTime(self.systemTime)
 
     def __str__(self):
         utc = f", {timestr(self.time.getUtc(self.systemTime))}" if self.time else ""
@@ -287,6 +290,15 @@ class DataLog:
         self.domains = {}
         self.domain = None
         self.fieldOffset = 0
+        self.prevSystemTime = 0
+        self.highTime = 0 # Compensate for incorrect time wrapping
+
+    def checkTime(self, t):
+        # Fixup bad systemtime overflows
+        if t < self.prevSystemTime:
+            self.highTime += 1
+        self.prevSystemTime = t
+        return t + self.highTime * round((1 << 32) / 1000)
 
     def loadBlock(self, block):
         off = 0
