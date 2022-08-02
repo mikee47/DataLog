@@ -65,13 +65,14 @@ class Entry:
         elif flags != 0xff:
             print(f"Corrupt block {block.sequence:#x}, skipping from offset {offset:#x}")
             return None, 0
+
+        if entry is not None:
+            entry.block = block
+            entry.blockOffset = offset
         return entry, 4 + entrySize
 
     def isValid(self):
         return True
-
-    def __str__(self):
-        return "%u bytes" % len(self.content)
 
     def fixup(self, ctx):
         pass
@@ -79,8 +80,11 @@ class Entry:
 
 class UnknownEntry(Entry):
     def __init__(self, kind, content, ctx):
-        self.kind = kind
+        self.kind = Kind(kind)
         self.content = content
+
+    def __str__(self):
+        return f"{len(self.content)} bytes"
 
 
 class Boot(Entry):
@@ -407,10 +411,10 @@ def main():
         #     continue
         # printData()
         # dataCount = 0
-        print(f"{str(entry.kind)}: {entry}")
         if entry.kind == Kind.data and entry.domain is not None:
             for f in entry.domain.fields:
                 print(f"{f.name}[{f.id}] = {f.getValue(entry.data)}")
+        print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {str(entry.kind)}: {entry}")
 
     printData()
 
