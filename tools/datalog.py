@@ -187,19 +187,22 @@ class Data(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.data
         self.time = ctx.time
-        (self.systemTime, domain, self.reserved) = struct.unpack("<IHH", content[:8])
-        self.domain = ctx.domains.get(domain)
+        (self.systemTime, self.domain_id, self.reserved) = struct.unpack("<IHH", content[:8])
+        self.domain = ctx.domains.get(self.domain_id)
         self.data = content[8:]
 
         self.systemTime = ctx.checkTime(self.systemTime)
 
     def __str__(self):
-        utc = f", {timestr(self.time.getUtc(self.systemTime))}" if self.time else ""
-        s = f"systemTime {self.systemTime}{utc}, domain {self.domain}"
+        s = f"systemTime {self.systemTime}"
+        if self.time:
+            s += f", {timestr(self.time.getUtc(self.systemTime))}"
         if self.domain is None:
-            s += f", {len(self.data)} bytes"
+            s += f", domain {self.domain_id}, {len(self.data)} bytes: "
+            s += " ".join("%02x" % x for x in self.data)
         else:
-            s += ": " + ", ".join(str(f.getValue(self.data)) for f in self.domain.fields)
+            s += f", domain {self.domain}: "
+            s += ", ".join(str(f.getValue(self.data)) for f in self.domain.fields)
         return s
 
     def fixup(self, ctx):
@@ -263,6 +266,8 @@ class BlockList(dict):
         f.seek(0, os.SEEK_END)
         fileSize = f.tell()
         f.seek(0, os.SEEK_SET)
+        ft = time.strftime("%x %X", time.gmtime(os.path.getmtime(filename)))
+        print(f"Scanning '{os.path.basename(filename)}', {fileSize} bytes, {fileSize // Block.SIZE} blocks, {ft}")
         if fileSize % Block.SIZE != 0:
             print("WARNING! File size is not a multiple of block size")
 
@@ -346,10 +351,10 @@ def main():
     for f in args.input:
         blocks.loadFromFile(f)
 
-    seq = sorted(blocks.keys())
-    if len(seq) == 0:
+    if len(blocks) == 0:
         lastBlock = 0
     else:
+        seq = sorted(blocks.keys())
         cur = seq[0]
         for n in seq[1:]:
             cur += 1
@@ -386,7 +391,7 @@ def main():
 
 
     log = DataLog()
-    for b in seq:
+    for b in sorted(blocks):
         print(f"Block {str(blocks[b])}")
         log.loadBlock(blocks[b])
 
