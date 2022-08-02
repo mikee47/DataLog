@@ -1,14 +1,15 @@
 #
 #!/usr/bin/env python3
-# Script to build Firmware Filesystem image
 #
-# See readme.md for further information
+# Script to manage data logs
 #
 
 import os, json, sys, struct, time, array
 import argparse
 from enum import IntEnum
 import http.client
+
+verbose = False
 
 class Kind(IntEnum):
     pad = 0,        # Unused padding
@@ -176,7 +177,7 @@ class Field(Entry):
         except:
             print(self.__dict__)
             print(f"type {self.type}, size {self.size}, name {self.name}")
-            raise
+            return 0
         (value,) = struct.unpack(fmt, data[self.offset:self.offset+self.size])
         return round(value, 3)
 
@@ -196,10 +197,13 @@ class Data(Entry):
 
         self.systemTime = ctx.checkTime(self.systemTime)
 
+    def getUtc(self):
+        return self.time.getUtc(self.systemTime) if self.time else 0
+
     def __str__(self):
         s = f"systemTime {self.systemTime}"
         if self.time:
-            s += f", {timestr(self.time.getUtc(self.systemTime))}"
+            s += f", {timestr(self.getUtc())}"
         if self.domain is None:
             s += f", domain {self.domain_id}, {len(self.data)} bytes: "
             s += " ".join("%02x" % x for x in self.data)
@@ -249,7 +253,8 @@ class Block:
         b = Block()
         b.header = data[:12]
         (b.size, b.kind, b.flags, b.magic, b.sequence) = struct.unpack("<HBBII", b.header)
-        print(f"Block {b.sequence:#010x}, size {b.size}, {b.kind}, magic {b.magic:#010x}")
+        if verbose:
+            print(f"Block {b.sequence:#010x}, size {b.size}, {b.kind}, magic {b.magic:#010x}")
         if b.magic != Block.MAGIC:
             print("** BAD MAGIC")
             return None
@@ -270,7 +275,8 @@ class BlockList(dict):
         fileSize = f.tell()
         f.seek(0, os.SEEK_SET)
         ft = time.strftime("%x %X", time.gmtime(os.path.getmtime(filename)))
-        print(f"Scanning '{os.path.basename(filename)}', {fileSize} bytes, {fileSize // Block.SIZE} blocks, {ft}")
+        if verbose:
+            print(f"Scanning '{os.path.basename(filename)}', {fileSize} bytes, {fileSize // Block.SIZE} blocks, {ft}")
         if fileSize % Block.SIZE != 0:
             print("WARNING! File size is not a multiple of block size")
 
@@ -287,7 +293,8 @@ class BlockList(dict):
             self.append(block)
             blockCount += 1
 
-        print(f"{os.path.basename(filename)}: {blockCount} new blocks, {dupes} dupes")
+        if verbose:
+            print(f"{os.path.basename(filename)}: {blockCount} new blocks, {dupes} dupes")
 
     def append(self, block):
         self[block.sequence] = block
@@ -348,8 +355,16 @@ class DataLog:
 def main():
     parser = argparse.ArgumentParser(description='DataLog tool')
     parser.add_argument('input', nargs='*', help='Log file to read')
+    parser.add_argument('--fetch', metavar='PATH', help='http path to datalog server')
+    parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--dump', action='store_true')
+    parser.add_argument('--export', action='store_true')
+
+    global verbose
 
     args = parser.parse_args()
+    verbose = args.verbose
+
     blocks = BlockList()
     for f in args.input:
         blocks.loadFromFile(f)
@@ -368,56 +383,148 @@ def main():
         print(f"lastBlock {lastBlock} ({lastBlock:#x})")
         # print("\r\n".join(str(n) for n in seq))
 
+    if args.fetch:
+        print(f"FETCH {args.fetch}")
+        server, path = args.fetch.split('/', 1)
+        conn = http.client.HTTPConnection(server,  timeout=10)
+        block = lastBlock + 1
+        conn.request("GET", f"/{path}?start={block}")
+        rsp = conn.getresponse()
+        print(rsp.status, rsp.reason)
+        data = rsp.read()
+        print(f"{len(data)} bytes received")
+        if len(data) != 0:
+            with open("logs/datalog-%08x.bin" % block, "wb") as f:
+                f.write(data)
+            newBlockCount = 0
+            off = 0
+            while off < len(data):
+                block = Block.parse(data[off:off+Block.SIZE])
+                off += Block.SIZE
+                if block is None:
+                    continue
+                print(block)
+                blocks.append(block)
+                newBlockCount += 1
 
-    conn = http.client.HTTPConnection("192.168.1.115",  timeout=10)
-    block = lastBlock + 1
-    conn.request("GET", f"/datalog?start={block}")
-    rsp = conn.getresponse()
-    print(rsp.status, rsp.reason)
-    data = rsp.read()
-    print(f"{len(data)} bytes received")
-    if len(data) != 0:
-        with open("logs/datalog-%08x.bin" % block, "wb") as f:
-            f.write(data)
-        newBlockCount = 0
-        off = 0
-        while off < len(data):
-            block = Block.parse(data[off:off+Block.SIZE])
-            off += Block.SIZE
-            if block is None:
-                continue
-            print(block)
-            blocks.append(block)
-            newBlockCount += 1
-
-        blocks.saveToFile("archive.bin")
-
+            # blocks.saveToFile("archive.bin")
 
     log = DataLog()
     for b in sorted(blocks):
-        print(f"Block {str(blocks[b])}")
         log.loadBlock(blocks[b])
-
-    dataCount = 0
-
-    def printData():
-        if dataCount != 0:
-            print(f"Kind.data x {dataCount}")
-
-    for entry in log.entries:
-        # if entry.kind == Kind.data:
-        #     dataCount += 1
-        #     continue
-        # printData()
-        # dataCount = 0
-        if entry.kind == Kind.data and entry.domain is not None:
-            for f in entry.domain.fields:
-                print(f"{f.name}[{f.id}] = {f.getValue(entry.data)}")
-        print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {str(entry.kind)}: {entry}")
-
-    printData()
-
     print(f"{len(log.entries)} entries loaded")
+
+    if args.dump:
+        dataCount = 0
+
+        def printData():
+            if dataCount != 0:
+                print(f"Kind.data x {dataCount}")
+
+        for entry in log.entries:
+            # if entry.kind == Kind.data:
+            #     dataCount += 1
+            #     continue
+            # printData()
+            # dataCount = 0
+            print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {str(entry.kind)}: {entry}")
+            # if entry.kind == Kind.data and entry.domain is not None:
+            #     for f in entry.domain.fields:
+            #         print(f"{f.name}[{f.id}] = {f.getValue(entry.data)}")
+
+        printData()
+
+
+    outputFields = [
+        # 'RunState',
+        # 'ActiveEnergyToday',
+        # 'ReactiveEnergyToday',
+        # 'GridWorkTimeToday',
+        # 'ActiveEnergyTotal',
+        # 'ActiveEnergyTotalHigh',
+        # 'BatChargeToday',
+        # 'BatDischargeToday',
+        # 'BatChargeTotal',
+        # 'BatChargeTotalHigh',
+        # 'BatDischargeTotal',
+        # 'BatDischargeTotalHigh',
+        # 'GridImportToday',
+        # 'GridExportToday',
+        # 'GridFrequency',
+        # 'GridExportTotal',
+        # 'GridExportTotalHigh',
+        # 'LoadEnergyToday',
+        # 'LoadEnergyTotal',
+        # 'LoadEnergyTotalHigh',
+        'DcTemp',
+        'IgbtTemp',
+        # 'PvEnergyToday',
+        # 'Pv1Voltage',
+        # 'Pv1Current',
+        # 'Pv2Voltage',
+        # 'Pv2Current',
+        # 'GridVoltage',
+        # 'InverterVoltage',
+        # 'LoadVoltage',
+        # 'GridCurrentL1',
+        # 'InverterOutputCurrentL1',
+        'AuxPower',
+        # 'GridPowerTotal',
+        'InverterPowerTotal',
+        # 'LoadPowerTotal',
+        # 'LoadCurrentL1',
+        # 'LoadCurrentL2',
+        # 'BatteryTemp',
+        # 'BatteryVoltage',
+        # 'BatterySOC',
+        'BatteryPower',
+        # 'BatteryCurrent',
+        # 'InverterFrequency',
+        # 'GridRelayStatus',
+        # 'AuxRelayStatus',
+    ]
+
+    def fieldFilter(field):
+        return field.name in outputFields
+
+    if args.export:
+        lastTime = 0
+        values = []
+        files = {}
+        for entry in log.entries:
+            if entry.kind != Kind.data:
+                continue
+            if entry.domain is None:
+                continue
+            fields = entry.domain.fields
+            if entry.domain.name == 'sunsynk/inverter':
+                fields = list(filter(fieldFilter, fields))
+            filename = entry.domain.name.replace('/', '.')
+            filename = f"data/{filename}.csv"
+            file = files.get(filename)
+            if not file:
+                files[filename] = file = open(filename, "w")
+                file.write("time,")
+                file.write(",".join(f'"{f.name}"' for f in fields))
+                file.write("\r\n")
+            utc = entry.getUtc()
+            try:
+                if utc // 60 == lastTime // 60:
+                    for i, f in enumerate(fields):
+                        # print(f"{i}, {f.name}")
+                        values[i] = (values[i] + f.getValue(entry.data)) / 2
+                else:
+                    if lastTime != 0:
+                        secs = 60 * (lastTime // 60)
+                        file.write(time.strftime("%Y-%m-%d %H:%M", time.gmtime(secs)))
+                        file.write(',')
+                        file.write(",".join(str(round(v)) for v in values))
+                        file.write("\r\n")
+                    values = [f.getValue(entry.data) for f in fields]
+            except:
+                pass
+
+            lastTime = utc
 
 
 if __name__ == "__main__":
