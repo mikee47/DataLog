@@ -143,6 +143,19 @@ class Field(Entry):
         Signed = 1,
         Float = 2,
 
+    typemap = {
+        (Type.Float, 4): ("float", "f"),
+        (Type.Float, 8): ("double", "d"),
+        (Type.Unsigned, 1): ("uint8_t", "B"),
+        (Type.Unsigned, 2): ("uint16_t", "H"),
+        (Type.Unsigned, 4): ("uint32_t", "I"),
+        (Type.Unsigned, 8): ("uint64_t", "Q"),
+        (Type.Signed, 1): ("int8_t", "b"),
+        (Type.Signed, 2): ("int16_t", "h"),
+        (Type.Signed, 4): ("int32_t", "i"),
+        (Type.Signed, 8): ("int64_t", "q"),
+    }
+
     def __init__(self, content, ctx):
         self.kind = Kind.field
         self.domain = ctx.domain
@@ -150,32 +163,16 @@ class Field(Entry):
         self.name = content[4:].decode()
         self.offset = ctx.fieldOffset
         ctx.fieldOffset += self.size
-        self.domain.fields.append(self)
+        if self.domain is not None:
+            self.domain.fields.append(self)
 
     def typestr(self):
-        if self.type == Field.Type.Float:
-            return {4: "float", 8: "double"}[self.size]
-        elif self.type == Field.Type.Unsigned:
-            return f"uint{self.size*8}_t"
-        elif self.type == Field.Type.Signed:
-            return f"int{self.size*8}_t"
-        else:
-            return f"{Type(self.type)}{self.size*8}"
+        t = Field.typemap.get((self.type, self.size))
+        return t[0] if t else f"{str(Field.Type(self.type))}{self.size*8}"
 
     def getValue(self, data):
-        map = {
-            Field.Type.Float: {
-                4: "f", 8: "d"
-            },
-            Field.Type.Unsigned: {
-                1: "B", 2: "H", 4: "I", 8: "Q"
-            },
-            Field.Type.Signed: {
-                1: "b", 2: "h", 4: "i", 8: "q"
-            }
-        }
         try:
-            fmt = "<" + map[self.type][self.size]
+            fmt = "<" + Field.typemap[(self.type, self.size)][1]
         except:
             print(self.__dict__)
             print(f"type {self.type}, size {self.size}, name {self.name}")
@@ -184,7 +181,9 @@ class Field(Entry):
         return round(value, 3)
 
     def __str__(self):
-        return "%s id %u, %s, name '%s'" % (self.domain.name, self.id, self.typestr(), self.name)
+        s = "?" if self.domain is None else self.domain.name
+        s += f", id {self.id}, {self.typestr()}, name '{self.name}'"
+        return s
 
 
 class Data(Entry):
@@ -250,7 +249,7 @@ class Block:
         b = Block()
         b.header = data[:12]
         (b.size, b.kind, b.flags, b.magic, b.sequence) = struct.unpack("<HBBII", b.header)
-        print(f"Block {b.sequence:#010x}, size {b.size}, {str(Kind(b.kind))}, magic {b.magic:#010x}")
+        print(f"Block {b.sequence:#010x}, size {b.size}, {b.kind}, magic {b.magic:#010x}")
         if b.magic != Block.MAGIC:
             print("** BAD MAGIC")
             return None
