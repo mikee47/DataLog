@@ -104,13 +104,11 @@ bool DataLog::init(Storage::Partition partition)
 	for(unsigned block = 0; block < totalBlocks; ++block) {
 		auto seq = sequences[block];
 		if(seq > endBlock.sequence) {
-			endBlock.number = block;
-			endBlock.sequence = seq;
+			endBlock = BlockInfo{block, seq};
 		}
 	}
 
 	// Scan backwards to find start point
-	BlockStart s;
 	auto block = endBlock;
 	do {
 		startBlock = block;
@@ -136,6 +134,11 @@ bool DataLog::init(Storage::Partition partition)
 #endif
 		writeOffset += ALIGNUP4(sizeof(header) + header.size);
 	} while(writeOffset < endOffset);
+
+	if(writeOffset > endOffset) {
+		debug_w("[DL] End block %u scan overflowed", endBlock.sequence);
+		writeOffset = endOffset;
+	}
 
 	debug_i("[DL] startBlock #%u seq %u", startBlock.number, startBlock.sequence);
 	debug_i("[DL] endBlock #%u seq %u", endBlock.number, endBlock.sequence);
