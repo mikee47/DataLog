@@ -64,36 +64,12 @@ bool DataLog::init(Storage::Partition partition)
 		return false;
 	}
 
-	/*
-     * Make some assumptions for simplicity. We can improve this later:
-     *
-     * - The partition was initially fully erased 
-     * - The log isn't full
-     * - There are no invalid pages
-     *
-     * Scan sequence:
-     * - inspect each block header to determine the oldest and newest block sequence numbers
-     * - if there are no blocks marked, the log is empty
-     * - block with the oldest number is the startBlock
-     * - search last block to determine the write offset
-	 *
-	 *
-	 * Possible arrangements:
-	 *
-	 * Partially filled:
-	 *	[start] ... [end] [erased]...
-	 * All blocks used, new block init incomplete:
-	 *	[erased] [start] ... [end]
-	 *	[end] [erased] [start] ...
-	 * All blocks used:
-	 *	[start] ... [end]
-	 *	[end] [start] ...
-     */
+	// Read all block sequence numbers
 	uint32_t sequences[totalBlocks]{};
 	for(unsigned block = 0; block < totalBlocks; ++block) {
 		BlockStart s{};
 		partition.read(block * blockSize, &s, sizeof(s));
-		debug_i("[DL] 0x%08x blk #%u seq %u", block * blockSize, block, s.block.sequence);
+		debug_i("[DL] 0x%08x blk #%u seq %08x", block * blockSize, block, s.block.sequence);
 		if(s.isValid()) {
 			sequences[block] = s.block.sequence;
 		}
@@ -108,40 +84,49 @@ bool DataLog::init(Storage::Partition partition)
 		}
 	}
 
-	// Scan backwards to find start point
-	auto block = endBlock;
-	do {
-		startBlock = block;
-		if(block.number == 0) {
-			block.number = totalBlocks - 1;
-		} else {
-			--block.number;
-		}
-		--block.sequence;
-	} while(block.sequence == sequences[block.number]);
+	if(endBlock.sequence == 0) {
+		// log is empty
+		startBlock = endBlock;
+		writeOffset = 0;
+	} else {
+		// Scan backwards to find start point
+		auto block = endBlock;
+		do {
+			startBlock = block;
+			if(block.sequence == 1) {
+				break;
+			}
+			if(block.number == 0) {
+				block.number = totalBlocks - 1;
+			} else {
+				--block.number;
+			}
+			--block.sequence;
+		} while(block.sequence == sequences[block.number]);
 
-	// Scan end block for write position
-	writeOffset = endBlock.number * blockSize;
-	auto endOffset = writeOffset + blockSize;
-	do {
-		Entry::Header header{};
-		partition.read(writeOffset, &header, sizeof(header));
-		if(header.kind == Entry::Kind::erased) {
-			break;
-		}
+		// Scan end block for write position
+		writeOffset = endBlock.number * blockSize;
+		auto endOffset = writeOffset + blockSize;
+		do {
+			Entry::Header header{};
+			partition.read(writeOffset, &header, sizeof(header));
+			if(header.kind == Entry::Kind::erased) {
+				break;
+			}
 #if DEBUG_VERBOSE_LEVEL >= DBG
-		m_printf(_F("0x%04x %s %u\r\n"), writeOffset, toString(header.kind).c_str(), header.size);
+			m_printf(_F("0x%04x %s %u\r\n"), writeOffset, toString(header.kind).c_str(), header.size);
 #endif
-		writeOffset += ALIGNUP4(sizeof(header) + header.size);
-	} while(writeOffset < endOffset);
+			writeOffset += ALIGNUP4(sizeof(header) + header.size);
+		} while(writeOffset < endOffset);
 
-	if(writeOffset > endOffset) {
-		debug_w("[DL] End block %u scan overflowed", endBlock.sequence);
-		writeOffset = endOffset;
+		if(writeOffset > endOffset) {
+			debug_w("[DL] End block %08x scan overflowed", endBlock.sequence);
+			writeOffset = endOffset;
+		}
 	}
 
-	debug_i("[DL] startBlock #%u seq %u", startBlock.number, startBlock.sequence);
-	debug_i("[DL] endBlock #%u seq %u", endBlock.number, endBlock.sequence);
+	debug_i("[DL] startBlock #%u seq %08x", startBlock.number, startBlock.sequence);
+	debug_i("[DL] endBlock #%u seq %08x", endBlock.number, endBlock.sequence);
 	debug_i("[DL] writeOffset = 0x%08x", writeOffset);
 
 	isReady = true;
@@ -192,22 +177,16 @@ bool DataLog::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength
 		writeOffset %= blockSize * totalBlocks;
 		endBlock.number = writeOffset / blockSize;
 		++endBlock.sequence;
-		if(endBlock.number == startBlock.number) {
-			if(startBlock.sequence == 0) {
-				// Empty log
-				assert(endBlock.number == 0 && endBlock.sequence == 1);
-				startBlock = endBlock;
-			} else {
-				// Retire this block
-				debug_i("[DL] Retire block #%u seq %u", startBlock.number, startBlock.sequence);
-				++startBlock.number;
-				startBlock.number %= totalBlocks;
-				++startBlock.sequence;
-			}
+		if(endBlock.number == startBlock.number && startBlock.sequence != 0) {
+			// Retire this block
+			debug_i("[DL] Retire block #%u seq %08x", startBlock.number, startBlock.sequence);
+			++startBlock.number;
+			startBlock.number %= totalBlocks;
+			++startBlock.sequence;
 		}
 
 		// Initialise the block
-		debug_i("[DL] Initialise block #%u seq %u @ 0x%08x", endBlock.number, endBlock.sequence, writeOffset);
+		debug_i("[DL] Initialise block #%u seq %08x @ 0x%08x", endBlock.number, endBlock.sequence, writeOffset);
 		partition.erase_range(writeOffset, blockSize);
 		BlockStart s{
 			.header =
