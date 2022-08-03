@@ -435,96 +435,117 @@ def main():
         printData()
 
 
-    outputFields = [
-        # 'RunState',
-        # 'ActiveEnergyToday',
-        # 'ReactiveEnergyToday',
-        # 'GridWorkTimeToday',
-        # 'ActiveEnergyTotal',
-        # 'ActiveEnergyTotalHigh',
-        # 'BatChargeToday',
-        # 'BatDischargeToday',
-        # 'BatChargeTotal',
-        # 'BatChargeTotalHigh',
-        # 'BatDischargeTotal',
-        # 'BatDischargeTotalHigh',
-        # 'GridImportToday',
-        # 'GridExportToday',
-        # 'GridFrequency',
-        # 'GridExportTotal',
-        # 'GridExportTotalHigh',
-        # 'LoadEnergyToday',
-        # 'LoadEnergyTotal',
-        # 'LoadEnergyTotalHigh',
-        'DcTemp',
-        'IgbtTemp',
-        # 'PvEnergyToday',
-        # 'Pv1Voltage',
-        # 'Pv1Current',
-        # 'Pv2Voltage',
-        # 'Pv2Current',
-        # 'GridVoltage',
-        # 'InverterVoltage',
-        # 'LoadVoltage',
-        # 'GridCurrentL1',
-        # 'InverterOutputCurrentL1',
-        'AuxPower',
-        # 'GridPowerTotal',
-        'InverterPowerTotal',
-        # 'LoadPowerTotal',
-        # 'LoadCurrentL1',
-        # 'LoadCurrentL2',
-        # 'BatteryTemp',
-        # 'BatteryVoltage',
-        # 'BatterySOC',
-        'BatteryPower',
-        # 'BatteryCurrent',
-        # 'InverterFrequency',
-        # 'GridRelayStatus',
-        # 'AuxRelayStatus',
-    ]
-
-    def fieldFilter(field):
-        return field.name in outputFields
+    outputFieldMap = {
+        "sunsynk/inverter": [
+            # 'RunState',
+            # 'ActiveEnergyToday',
+            # 'ReactiveEnergyToday',
+            # 'GridWorkTimeToday',
+            # 'ActiveEnergyTotal',
+            # 'ActiveEnergyTotalHigh',
+            # 'BatChargeToday',
+            # 'BatDischargeToday',
+            # 'BatChargeTotal',
+            # 'BatChargeTotalHigh',
+            # 'BatDischargeTotal',
+            # 'BatDischargeTotalHigh',
+            # 'GridImportToday',
+            # 'GridExportToday',
+            # 'GridFrequency',
+            # 'GridExportTotal',
+            # 'GridExportTotalHigh',
+            # 'LoadEnergyToday',
+            # 'LoadEnergyTotal',
+            # 'LoadEnergyTotalHigh',
+            'DcTemp',
+            'IgbtTemp',
+            # 'PvEnergyToday',
+            # 'Pv1Voltage',
+            # 'Pv1Current',
+            # 'Pv2Voltage',
+            # 'Pv2Current',
+            # 'GridVoltage',
+            # 'InverterVoltage',
+            # 'LoadVoltage',
+            # 'GridCurrentL1',
+            # 'InverterOutputCurrentL1',
+            'AuxPower',
+            # 'GridPowerTotal',
+            'InverterPowerTotal',
+            # 'LoadPowerTotal',
+            # 'LoadCurrentL1',
+            # 'LoadCurrentL2',
+            # 'BatteryTemp',
+            # 'BatteryVoltage',
+            # 'BatterySOC',
+            'BatteryPower',
+            # 'BatteryCurrent',
+            # 'InverterFrequency',
+            # 'GridRelayStatus',
+            # 'AuxRelayStatus',
+        ]
+    }
 
     if args.export:
-        lastTime = 0
-        values = []
-        files = {}
+        def rnd(x):
+            return round(x * 100) / 100
+
+        def writeValues(file, utc, values):
+            secs = 60 * (utc // 60)
+            file.write(time.strftime("%Y-%m-%d %H:%M", time.gmtime(secs)))
+            file.write(',')
+            file.write(",".join(str(rnd(v)) for v in values))
+            file.write("\r\n")
+
+        fieldMap = {}
+        valueMap = {}
+        fileMap = {}
+        timeMap = {}
         for entry in log.entries:
             if entry.kind != Kind.data:
                 continue
             if entry.domain is None:
                 continue
-            fields = entry.domain.fields
-            if entry.domain.name == 'sunsynk/inverter':
-                fields = list(filter(fieldFilter, fields))
-            filename = entry.domain.name.replace('/', '.')
-            filename = f"data/{filename}.csv"
-            file = files.get(filename)
-            if not file:
-                files[filename] = file = open(filename, "w")
+            utc = entry.getUtc()
+            fields = fieldMap.get(entry.domain.name)
+            if fields is None:
+                flt = outputFieldMap.get(entry.domain.name)
+                if flt is None:
+                    fields = entry.domain.fields
+                else:
+                    fields = list(filter(lambda f: f.name in flt, entry.domain.fields))
+                fieldMap[entry.domain.name] = fields
+                valueMap[entry.domain.name] = [f.getValue(entry.data) for f in fields]
+                filename = entry.domain.name.replace('/', '.')
+                filename = f"data/{filename}.csv"
+                file = fileMap[entry.domain.name] = open(filename, "w")
                 file.write("time,")
                 file.write(",".join(f'"{f.name}"' for f in fields))
                 file.write("\r\n")
-            utc = entry.getUtc()
-            try:
-                if utc // 60 == lastTime // 60:
-                    for i, f in enumerate(fields):
-                        # print(f"{i}, {f.name}")
-                        values[i] = (values[i] + f.getValue(entry.data)) / 2
-                else:
-                    if lastTime != 0:
-                        secs = 60 * (lastTime // 60)
-                        file.write(time.strftime("%Y-%m-%d %H:%M", time.gmtime(secs)))
-                        file.write(',')
-                        file.write(",".join(str(round(v)) for v in values))
-                        file.write("\r\n")
-                    values = [f.getValue(entry.data) for f in fields]
-            except:
-                pass
+            else:
+                lastTime = timeMap.get(entry.domain.name, 0)
+                values = valueMap[entry.domain.name]
+                file = fileMap[entry.domain.name]
+                try:
+                    if utc // 60 == lastTime // 60:
+                        for i, f in enumerate(fields):
+                            # print(f"{i}, {f.name}")
+                            values[i] = (values[i] + f.getValue(entry.data)) / 2
+                    else:
+                        if lastTime != 0:
+                            writeValues(file, lastTime, values)
+                        valueMap[entry.domain.name] = [f.getValue(entry.data) for f in fields]
+                except:
+                    raise
+                    pass
 
-            lastTime = utc
+            timeMap[entry.domain.name] = utc
+
+        for d in fileMap:
+            lastTime = timeMap[d]
+            file = fileMap[d]
+            values = valueMap[d]
+            writeValues(file, lastTime, values)
 
 
 if __name__ == "__main__":
