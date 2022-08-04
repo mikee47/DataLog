@@ -254,7 +254,7 @@ class Block:
         b.header = data[:12]
         (b.size, b.kind, b.flags, b.magic, b.sequence) = struct.unpack("<HBBII", b.header)
         if verbose:
-            print(f"Block {b.sequence:#010x}, size {b.size}, {b.kind}, magic {b.magic:#010x}")
+            print(f"Block {b.sequence:#010x}, entrySize {b.size}, data size {len(data) - b.size}, {b.kind}, magic {b.magic:#010x}")
         if b.magic != Block.MAGIC:
             print("** BAD MAGIC")
             return None
@@ -387,15 +387,15 @@ def main():
         print(f"FETCH {args.fetch}")
         server, path = args.fetch.split('/', 1)
         conn = http.client.HTTPConnection(server,  timeout=10)
-        block = lastBlock + 1
-        conn.request("GET", f"/{path}?start={block}")
+        startBlock = lastBlock + 1
+        conn.request("GET", f"/{path}?start={startBlock}")
         rsp = conn.getresponse()
         print(rsp.status, rsp.reason)
         data = rsp.read()
         print(f"{len(data)} bytes received")
+        startBlock = 0
+        endBlock = 0
         if len(data) != 0:
-            with open("logs/datalog-%08x.bin" % block, "wb") as f:
-                f.write(data)
             newBlockCount = 0
             off = 0
             while off < len(data):
@@ -403,9 +403,15 @@ def main():
                 off += Block.SIZE
                 if block is None:
                     continue
-                print(block)
+                if startBlock == 0:
+                    startBlock = block.sequence
+                endBlock = block.sequence
+                if verbose:
+                    print(block)
                 blocks.append(block)
                 newBlockCount += 1
+            with open("logs/datalog-%08x-%08x.bin" % (startBlock, endBlock), "wb") as f:
+                f.write(data)
 
             # blocks.saveToFile("archive.bin")
 
