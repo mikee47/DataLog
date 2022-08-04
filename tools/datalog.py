@@ -397,18 +397,25 @@ def main():
     if args.fetch:
         print(f"FETCH {args.fetch}")
         server, path = args.fetch.split('/', 1)
-        conn = http.client.HTTPConnection(server,  timeout=10)
+        conn = http.client.HTTPConnection(server, timeout=10)
         if os.path.exists(FILE_NEXTSEQ):
             with open(FILE_NEXTSEQ) as f:
                 startBlock = int(f.read(), 0)
-                print("startBlock %x" % startBlock)
+            print("startBlock %x" % startBlock)
         else:
             startBlock = 0
-        conn.request("GET", f"/{path}?start={startBlock}")
-        rsp = conn.getresponse()
-        print(rsp.status, rsp.reason)
-        data = rsp.read()
-        print(f"{len(data)} bytes received")
+        attempt = 0
+        while attempt < 3:
+            try:
+                conn.request("GET", f"/{path}?start={startBlock}")
+                rsp = conn.getresponse()
+                print(rsp.status, rsp.reason)
+                data = rsp.read()
+                print(f"{len(data)} bytes received")
+                break
+            except socket.timeout as e:
+                print(f"{e}, attempt {attempt}")
+            attempt += 1
         startBlock = None
         endBlock = None
         if len(data) != 0:
@@ -426,6 +433,9 @@ def main():
                     print(block)
                 blocks.append(block)
                 newBlockCount += 1
+        if startBlock is None:
+            print("No valid blocks received")
+        else:
             endSequence = endBlock.sequence
             if endBlock.isFull():
                 nextSequence = endSequence + 1
