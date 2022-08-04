@@ -370,11 +370,48 @@ def main():
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--dump', action='store_true')
     parser.add_argument('--export', action='store_true')
+    parser.add_argument('--compact', action='store_true')
 
     global verbose
 
     args = parser.parse_args()
     verbose = args.verbose
+
+    if args.compact:
+        files = []
+        for f in args.input:
+            blocks = BlockList()
+            blocks.loadFromFile(f)
+            if len(blocks) != 0:
+                files.append((f, blocks))
+
+        endBlock = 0
+        files.sort(key = lambda x: (min(x[1]) << 16) + max(x[1]))
+        for f in files:
+            filename = f[0]
+            blocks = f[1]
+            first = min(blocks)
+            last = max(blocks)
+            print(filename)
+            while first <= endBlock and first <= last:
+                if first in blocks:
+                    del blocks[first]
+                first += 1
+            if last < endBlock:
+                print("GAP!!!")
+            if first > last:
+                print("EMPTY!!")
+            endBlock = last
+            st = os.stat(filename)
+            blocks.saveToFile(filename)
+            os.utime(filename, (st.st_atime, st.st_mtime))
+            newFileName = os.path.split(filename)[0] + f"/datalog-%08x-%08x.bin" % (first, last)
+            if newFileName != filename:
+                print(f"{filename} -> {newFileName}")
+                os.rename(filename, newFileName)
+
+        return
+
 
     blocks = BlockList()
     for f in args.input:
