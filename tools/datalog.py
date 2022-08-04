@@ -11,6 +11,11 @@ import http.client
 
 verbose = False
 
+FILE_DATALOG = "logs/datalog-%08x-%08x.bin"
+FILE_NEXTSEQ = "logs/next.seq"
+FILE_TAIL = "logs/tail.bin"
+
+
 class Kind(IntEnum):
     pad = 0,        # Unused padding
     block = 1,      # Identifies start of block
@@ -267,6 +272,9 @@ class Block:
     def __str__(self):
         return f"{self.sequence:#010x} {Kind(self.kind)}, {self.flags:#02x}, {self.magic:#08x}"
 
+    def isFull(self):
+        return 4 + self.size + len(self.content) == Block.SIZE
+
 
 class BlockList(dict):
     def loadFromFile(self, filename):
@@ -276,15 +284,18 @@ class BlockList(dict):
         f.seek(0, os.SEEK_SET)
         ft = time.strftime("%x %X", time.gmtime(os.path.getmtime(filename)))
         if verbose:
-            print(f"Scanning '{os.path.basename(filename)}', {fileSize} bytes, {fileSize // Block.SIZE} blocks, {ft}")
+            print(f"Scanning '{os.path.basename(filename)}', {fileSize} bytes, {(fileSize + Block.SIZE - 1) // Block.SIZE} blocks, {ft}")
         if fileSize % Block.SIZE != 0:
             print("WARNING! File size is not a multiple of block size")
 
         dupes = 0
         blockCount = 0
-        for b in range(fileSize // Block.SIZE):
+        while True:
             pos = f.tell()
-            block = Block.parse(f.read(Block.SIZE))
+            data = f.read(Block.SIZE)
+            if len(data) == 0:
+                break
+            block = Block.parse(data)
             if block is None:
                 continue
             if block.sequence in self:
@@ -387,14 +398,19 @@ def main():
         print(f"FETCH {args.fetch}")
         server, path = args.fetch.split('/', 1)
         conn = http.client.HTTPConnection(server,  timeout=10)
-        startBlock = lastBlock + 1
+        if os.path.exists(FILE_NEXTSEQ):
+            with open(FILE_NEXTSEQ) as f:
+                startBlock = int(f.read(), 0)
+                print("startBlock %x" % startBlock)
+        else:
+            startBlock = 0
         conn.request("GET", f"/{path}?start={startBlock}")
         rsp = conn.getresponse()
         print(rsp.status, rsp.reason)
         data = rsp.read()
         print(f"{len(data)} bytes received")
-        startBlock = 0
-        endBlock = 0
+        startBlock = None
+        endBlock = None
         if len(data) != 0:
             newBlockCount = 0
             off = 0
@@ -403,22 +419,37 @@ def main():
                 off += Block.SIZE
                 if block is None:
                     continue
-                if startBlock == 0:
-                    startBlock = block.sequence
-                endBlock = block.sequence
+                if startBlock is None:
+                    startBlock = block
+                endBlock = block
                 if verbose:
                     print(block)
                 blocks.append(block)
                 newBlockCount += 1
-            with open("logs/datalog-%08x-%08x.bin" % (startBlock, endBlock), "wb") as f:
-                f.write(data)
+            endSequence = endBlock.sequence
+            if endBlock.isFull():
+                nextSequence = endSequence + 1
+            else:
+                nextSequence = endSequence
+                endSequence -= 1
+            tail = len(data) % Block.SIZE
+            off = len(data) - tail
+            if endSequence >= startBlock.sequence:
+                filename = FILE_DATALOG % (startBlock.sequence, endSequence)
+                with open(filename, "wb") as f:
+                    f.write(data[:off])
+            with open(FILE_TAIL, "wb") as f:
+                f.write(data[off:])
+            with open(FILE_NEXTSEQ, "w") as f:
+                f.write(hex(nextSequence))
+            print("tail %u, next %x" % (tail, nextSequence))
+            
 
-            # blocks.saveToFile("archive.bin")
-
-    log = DataLog()
-    for b in sorted(blocks):
-        log.loadBlock(blocks[b])
-    print(f"{len(log.entries)} entries loaded")
+    if args.dump or args.export:
+        log = DataLog()
+        for b in sorted(blocks):
+            log.loadBlock(blocks[b])
+        print(f"{len(log.entries)} entries loaded")
 
     if args.dump:
         dataCount = 0
