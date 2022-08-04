@@ -264,26 +264,31 @@ bool DataLog::writeData(uint16_t domain, const void* data, uint16_t length)
 
 int DataLog::read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSize)
 {
-	debug_d("[DL] read: block %u, offset %u, size %u", block, offset, bufSize);
-
-	if(offset >= blockSize || block < startBlock.sequence || block >= endBlock.sequence) {
+	if(!isReady()) {
 		return -1;
 	}
 
-	uint32_t maxSize = (endBlock.sequence - block) * blockSize - offset;
-	auto bytesToRead = std::min(uint32_t(bufSize), maxSize);
-	auto bufptr = static_cast<uint8_t*>(buffer);
-	uint32_t readOffset = (startBlock.number + block - startBlock.sequence) * blockSize + offset;
+	debug_d("[DL] read: block %u, offset %u, size %u", block, offset, bufSize);
+
 	uint32_t totalSize = totalBlocks * blockSize;
+	uint32_t readOffset = (startBlock.number + block - startBlock.sequence) * blockSize + offset;
+	if(readOffset >= totalSize) {
+		readOffset -= totalSize;
+	}
+
 	uint32_t bytesRead{0};
-	while(bytesRead < bytesToRead) {
-		readOffset %= totalSize;
-		auto len = std::min(bytesToRead - bytesRead, totalSize - readOffset);
-		debug_d("[DL] read %u, %u", readOffset, len);
-		partition.read(readOffset, bufptr, len);
-		bufptr += len;
+	if(readOffset > writeOffset) {
+		auto len = std::min(uint32_t(bufSize), totalSize - readOffset);
+		debug_i("[DL] read %u, %u", readOffset, len);
+		partition.read(readOffset, static_cast<uint8_t*>(buffer), len);
 		bytesRead += len;
-		readOffset += len;
+		readOffset = 0;
+	}
+	auto len = std::min(bufSize - bytesRead, writeOffset - readOffset);
+	if(len != 0) {
+		debug_i("[DL] read %u, %u", readOffset, len);
+		partition.read(readOffset, static_cast<uint8_t*>(buffer) + bytesRead, len);
+		bytesRead += len;
 	}
 
 	return bytesRead;

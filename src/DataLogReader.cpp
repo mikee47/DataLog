@@ -17,7 +17,7 @@ uint16_t DataLogReader::readMemoryBlock(char* data, int bufSize)
 			log.getStartBlock(), log.getEndBlock(), readPos);
 
 	int res = log.read(block, offset, data, bufSize);
-	if(res < 0) {
+	if(res <= 0) {
 		done = true;
 		res = 0;
 	}
