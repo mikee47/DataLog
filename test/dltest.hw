@@ -1,0 +1,20 @@
+{
+    "name": "New Profile",
+    "base_config": "standard",
+    "options": [],
+    "partitions": {
+        "rom0": {
+            "size": "712K"
+        },
+        "datalog1": {
+            "device": "spiFlash",
+            "address": "0x000ba000",
+            "size": "256K",
+            "type": "user",
+            "subtype": 1,
+            "readonly": false,
+            "encrypted": false,
+            "filename": ""
+        }
+    }
+}
