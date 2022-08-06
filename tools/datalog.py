@@ -77,7 +77,7 @@ class Entry:
                 # print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
                 try:
                     entry = map[kind](content, ctx)
-                except (UnicodeDecodeError, IndexError, struct.error) as err:
+                except (UnicodeDecodeError, IndexError, struct.error, ValueError) as err:
                     entry = None
                     print(f"seq {block.sequence:#x} @{offset:#010x} {str(Kind(kind))}, size {entrySize}, flags {flags}, {type(err).__name__}: {err}")
             if entry is None:
@@ -182,6 +182,8 @@ class Field(Entry):
         self.kind = Kind.field
         self.table = ctx.table
         (self.id, type, self.size) = struct.unpack("<HBB", content[:4])
+        if self.size == 0:
+            raise ValueError('Bad field')
         self.type = type & 0x7f
         self.isVariable = (type & 0x80) != 0
         self.name = content[4:].decode()
@@ -198,8 +200,7 @@ class Field(Entry):
         try:
             fmt = Field.typemap[(self.type, self.size)][1]
         except:
-            print(self.__dict__)
-            print(f"type {self.type}, size {self.size}, name {self.name}")
+            print(f"Bad field type! type {self.type}, size {self.size}, name {self.name}, table {self.table}")
             return 0
         if not self.isVariable:
             (value,) = struct.unpack(f"<{fmt}", data[self.offset:self.offset+self.size])
@@ -234,7 +235,6 @@ class Data(Entry):
         (self.systemTime, self.table_id, self.reserved) = struct.unpack("<IHH", content[:8])
         self.table = ctx.tables.get(self.table_id)
         self.data = content[8:]
-
         self.systemTime = ctx.checkTime(self.systemTime)
 
     def getUtc(self):
