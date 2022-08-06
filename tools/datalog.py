@@ -550,9 +550,9 @@ def main():
             # printData()
             # dataCount = 0
             print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {str(entry.kind)}: {entry}")
-            # if entry.kind == Kind.data and entry.table is not None:
-            #     for f in entry.table.fields:
-            #         print(f"{f.name}[{f.id}] = {f.getValue(entry.data)}")
+            if verbose and entry.kind == Kind.data and entry.table is not None:
+                for f in entry.table.fields:
+                    print(f"  {f.id:#5} {f.name} = {f.getValue(entry.data)}")
 
         printData()
 
