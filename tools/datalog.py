@@ -21,7 +21,7 @@
 import os, json, sys, struct, time, array
 import argparse
 from enum import IntEnum
-import http.client
+import http.client, socket
 
 verbose = False
 
@@ -468,16 +468,17 @@ def main():
     if args.fetch:
         print(f"FETCH {args.fetch}")
         server, path = args.fetch.split('/', 1)
-        conn = http.client.HTTPConnection(server, timeout=10)
         if os.path.exists(FILE_NEXTSEQ):
             with open(FILE_NEXTSEQ) as f:
                 startBlock = int(f.read(), 0)
             print("startBlock %x" % startBlock)
         else:
             startBlock = 0
+
         attempt = 0
-        while attempt < 3:
+        while True:
             try:
+                conn = http.client.HTTPConnection(server, timeout=10)
                 conn.request("GET", f"/{path}?start={startBlock}")
                 rsp = conn.getresponse()
                 print(rsp.status, rsp.reason)
@@ -485,8 +486,11 @@ def main():
                 print(f"{len(data)} bytes received")
                 break
             except socket.timeout as e:
+                attempt += 1
                 print(f"{e}, attempt {attempt}")
-            attempt += 1
+                if attempt > 3:
+                    raise
+
         startBlock = None
         endBlock = None
         if len(data) != 0:
