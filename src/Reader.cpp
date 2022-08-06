@@ -1,5 +1,5 @@
 /**
- * DataLogReader.cpp
+ * Reader.cpp
  *
  * Copyright 2022 mikee47 <mike@sillyhouse.net>
  *
@@ -17,12 +17,12 @@
  *
  ****/
 
-#undef DEBUG_VERBOSE_LEVEL
-
-#include "DataLogReader.h"
+#include "include/DataLog/Reader.h"
 #include <debug_progmem.h>
 
-uint16_t DataLogReader::readMemoryBlock(char* data, int bufSize)
+namespace DataLog
+{
+uint16_t Reader::readMemoryBlock(char* data, int bufSize)
 {
 	if(bufSize == 0) {
 		return 0;
@@ -44,7 +44,7 @@ uint16_t DataLogReader::readMemoryBlock(char* data, int bufSize)
 	return res;
 }
 
-int DataLogReader::seekFrom(int offset, SeekOrigin origin)
+int Reader::seekFrom(int offset, SeekOrigin origin)
 {
 	debug_d("[DLR] SEEK offset %u, origin %u (readPos %u, size %u)", offset, origin, readPos, size);
 
@@ -55,3 +55,5 @@ int DataLogReader::seekFrom(int offset, SeekOrigin origin)
 	readPos += offset;
 	return readPos;
 }
+
+} // namespace DataLog

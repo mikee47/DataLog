@@ -1,5 +1,5 @@
 /**
- * DataLog.cpp
+ * Log.cpp
  *
  * Copyright 2022 mikee47 <mike@sillyhouse.net>
  *
@@ -17,14 +17,14 @@
  *
  ****/
 
-#undef DEBUG_VERBOSE_LEVEL
+// #undef DEBUG_VERBOSE_LEVEL
 
-#include "DataLog.h"
-#include <Clock.h>
+#include "include/DataLog/Log.h"
 #include <debug_progmem.h>
-#include <FlashString/Map.hpp>
 #include <esp_system.h>
 
+namespace DataLog
+{
 namespace
 {
 constexpr uint32_t magic{0xA78BE044};
@@ -36,40 +36,21 @@ constexpr uint32_t magic{0xA78BE044};
 #define PAGES_PER_BLOCK 4
 #endif
 
-#define XX(tag, value, ...) DEFINE_FSTR_LOCAL(str_##tag, #tag)
-DATALOG_ENTRY_KIND_MAP(XX)
-#undef XX
-
-#define XX(tag, value, ...)                                                                                            \
-	{                                                                                                                  \
-		DataLog::Entry::Kind::tag,                                                                                     \
-		&str_##tag,                                                                                                    \
-	},
-DEFINE_FSTR_MAP(kindTags, DataLog::Entry::Kind, FlashString, DATALOG_ENTRY_KIND_MAP(XX))
-#undef XX
-
 struct BlockStart {
-	DataLog::Entry::Header header;
-	DataLog::Entry::Block block;
+	Entry::Header header;
+	Entry::Block block;
 
 	bool isValid() const
 	{
-		return header.size == sizeof(block) && header.kind == DataLog::Entry::Kind::block && block.magic == magic;
+		return header.size == sizeof(block) && header.kind == Entry::Kind::block && block.magic == magic;
 	}
 };
 
 }; // namespace
 
-uint32_t DataLog::prevTicks;
-uint32_t DataLog::highTicks;
-uint16_t DataLog::tableCount;
+uint16_t Log::tableCount;
 
-String toString(DataLog::Entry::Kind kind)
-{
-	return String(kindTags[kind]);
-}
-
-bool DataLog::init(Storage::Partition partition)
+bool Log::init(Storage::Partition partition)
 {
 	if(!partition) {
 		return false;
@@ -161,18 +142,7 @@ bool DataLog::init(Storage::Partition partition)
 	return true;
 }
 
-DataLog::SystemTime DataLog::getSystemTime()
-{
-	uint32_t ticks = micros();
-	if(ticks < uint32_t(prevTicks)) {
-		++highTicks;
-	}
-	prevTicks = ticks;
-
-	return ((uint64_t(highTicks) << 32) + ticks) / 1000;
-}
-
-bool DataLog::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const void* data, uint16_t dataLength)
+bool Log::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const void* data, uint16_t dataLength)
 {
 	if(!isReady()) {
 		return false;
@@ -243,7 +213,7 @@ bool DataLog::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength
 	return true;
 }
 
-bool DataLog::writeTime()
+bool Log::writeTime()
 {
 	Entry::Time e{
 		.systemTime = getSystemTime(),
@@ -252,43 +222,7 @@ bool DataLog::writeTime()
 	return writeEntry(e);
 }
 
-DataLog::Entry::Table::ID DataLog::writeTable(const String& name)
-{
-	++tableCount;
-	auto tableId = tableCount;
-	writeTable(tableId, name);
-	return tableId;
-}
-
-bool DataLog::writeTable(DataLog::Entry::Table::ID tableId, const String& name)
-{
-	Entry::Table e{
-		.id = tableId,
-	};
-	return writeEntry(e, name);
-}
-
-bool DataLog::writeField(uint16_t id, Entry::Field::Type type, uint8_t size, const String& name, bool variable)
-{
-	Entry::Field e{
-		.id = id,
-		.type = type,
-		.variable = variable,
-		.size = size,
-	};
-	return writeEntry(e, name);
-}
-
-bool DataLog::writeData(uint16_t table, const void* data, uint16_t length)
-{
-	Entry::Data e{
-		.systemTime = getSystemTime(),
-		.table = table,
-	};
-	return writeEntry(e, data, length);
-}
-
-int DataLog::read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSize)
+int Log::read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSize)
 {
 	if(!isReady()) {
 		return -1;
@@ -323,3 +257,5 @@ int DataLog::read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSiz
 
 	return bytesRead;
 }
+
+} // namespace DataLog

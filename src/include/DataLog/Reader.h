@@ -1,5 +1,5 @@
 /**
- * DataLogReader.h
+ * Reader.h
  *
  * Copyright 2022 mikee47 <mike@sillyhouse.net>
  *
@@ -19,11 +19,13 @@
 
 #pragma once
 
-#include "DataLog.h"
+#include "Log.h"
 #include <Data/Stream/DataSourceStream.h>
 
+namespace DataLog
+{
 /**
- * @brief Class to manage reading a data log.
+ * @brief Class to stream raw data log contents
  *
  * Server needs to understand basic block format of logs, to identify sequence numbers.
  * It periodically requests the next block.
@@ -43,10 +45,10 @@
  * is being actively written. If so, abort the transfer and return an error.
  *
  */
-class DataLogReader : public IDataSourceStream
+class Reader : public IDataSourceStream
 {
 public:
-	DataLogReader(DataLog& log, unsigned startBlock) : log(log), startBlock(startBlock)
+	Reader(Log& log, unsigned startBlock) : log(log), startBlock(startBlock)
 	{
 	}
 
@@ -65,8 +67,10 @@ public:
 	}
 
 private:
-	DataLog& log;
+	Log& log;
 	uint16_t startBlock;
 	uint32_t readPos{0};
 	bool done{false};
 };
+
+} // namespace DataLog
