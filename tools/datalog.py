@@ -231,8 +231,8 @@ class Data(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.data
         self.time = ctx.time
-        (self.systemTime, self.domain_id, self.reserved) = struct.unpack("<IHH", content[:8])
-        self.table = ctx.tables.get(self.domain_id)
+        (self.systemTime, self.table_id, self.reserved) = struct.unpack("<IHH", content[:8])
+        self.table = ctx.tables.get(self.table_id)
         self.data = content[8:]
 
         self.systemTime = ctx.checkTime(self.systemTime)
@@ -245,7 +245,7 @@ class Data(Entry):
         if self.time:
             s += f", {timestr(self.getUtc())}"
         if self.table is None:
-            s += f", table {self.domain_id}, {len(self.data)} bytes: "
+            s += f", table {self.table_id}, {len(self.data)} bytes: "
             s += " ".join("%02x" % x for x in self.data)
         else:
             s += f", table {self.table}: "
