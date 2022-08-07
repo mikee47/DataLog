@@ -146,10 +146,27 @@ bool Log::writeBoot()
 
 bool Log::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const void* data, uint16_t dataLength)
 {
-	if(!isReady()) {
+	if(state == State::uninitialised) {
 		return false;
 	}
 
+	if(state == State::busy) {
+		// Assume we're being called from a crash handler which may fire in middle of flash write operation
+		if(writeOffset % blockSize == 0) {
+			// Start of new block so will get erased anyway
+		} else {
+			// writeOffset only gets updated after flash write operation
+			// Skip block if the flash write was interrupted
+			writeOffset %= blockSize * totalBlocks;
+			Entry::Header header{};
+			partition.read(writeOffset, &header, sizeof(header));
+			if(header.kind != Entry::Kind::erased) {
+				writeOffset += sizeof(header) + ALIGNUP4(header.size);
+			}
+		}
+	}
+
+	state = State::busy;
 	auto entrySize = sizeof(Entry::Header) + infoLength + dataLength;
 	auto space = blockSize - (writeOffset % blockSize);
 	if(space < entrySize) {
@@ -207,11 +224,11 @@ bool Log::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, co
 	partition.write(writeOffset + sizeof(header) + infoLength, data, dataLength);
 	header.flags[Entry::Flag::invalid] = false;
 	partition.write(writeOffset, &header, sizeof(header));
-	writeOffset += sizeof(header) + infoLength + dataLength;
 
 	// Entries always start on a word boundary
-	writeOffset = ALIGNUP4(writeOffset);
+	writeOffset += sizeof(header) + ALIGNUP4(header.size);
 
+	state = State::ready;
 	return true;
 }
 

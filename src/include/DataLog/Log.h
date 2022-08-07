@@ -67,7 +67,7 @@ public:
 
 	bool isReady() const
 	{
-		return blockSize != 0;
+		return state == State::ready;
 	}
 
 	explicit operator bool() const
@@ -129,6 +129,12 @@ public:
 	}
 
 private:
+	enum class State {
+		uninitialised,
+		ready,
+		busy,
+	};
+
 	struct BlockInfo {
 		unsigned number;
 		uint32_t sequence;
@@ -141,6 +147,7 @@ private:
 	uint32_t writeOffset{0}; ///< Write offset from start of log
 	uint16_t blockSize{0};
 	uint16_t totalBlocks{0}; ///< Total number of blocks in partition
+	State state{State::uninitialised};
 };
 
 } // namespace DataLog
