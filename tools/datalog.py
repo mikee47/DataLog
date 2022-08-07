@@ -22,6 +22,7 @@ import os, json, sys, struct, time, array
 import argparse
 from enum import IntEnum
 import http.client, socket
+import sqlite3
 
 verbose = False
 
@@ -165,17 +166,17 @@ class Field(Entry):
         Char = 3,
 
     typemap = {
-        (Type.Float, 4): ("float", "f"),
-        (Type.Float, 8): ("double", "d"),
-        (Type.Unsigned, 1): ("uint8_t", "B"),
-        (Type.Unsigned, 2): ("uint16_t", "H"),
-        (Type.Unsigned, 4): ("uint32_t", "I"),
-        (Type.Unsigned, 8): ("uint64_t", "Q"),
-        (Type.Signed, 1): ("int8_t", "b"),
-        (Type.Signed, 2): ("int16_t", "h"),
-        (Type.Signed, 4): ("int32_t", "i"),
-        (Type.Signed, 8): ("int64_t", "q"),
-        (Type.Char, 1): ("char", "s"),
+        (Type.Float, 4): ("float", "f", "REAL"),
+        (Type.Float, 8): ("double", "d", "DOUBLE"),
+        (Type.Unsigned, 1): ("uint8_t", "B", "TINYINT"),
+        (Type.Unsigned, 2): ("uint16_t", "H", "SMALLINT"),
+        (Type.Unsigned, 4): ("uint32_t", "I", "INT"),
+        (Type.Unsigned, 8): ("uint64_t", "Q", "BIGINT"),
+        (Type.Signed, 1): ("int8_t", "b", "TINYINT"),
+        (Type.Signed, 2): ("int16_t", "h", "SMALLINT"),
+        (Type.Signed, 4): ("int32_t", "i", "INT"),
+        (Type.Signed, 8): ("int64_t", "q", "BIGINT"),
+        (Type.Char, 1): ("char", "s", "TEXT"),
     }
 
     def __init__(self, content, ctx):
@@ -195,6 +196,10 @@ class Field(Entry):
     def typestr(self):
         t = Field.typemap.get((self.type, self.size))
         return t[0] if t else f"{str(Field.Type(self.type))}{self.size*8}"
+
+    def sqltype(self):
+        t = Field.typemap.get((self.type, self.size))
+        return t[2]
 
     def getValue(self, data):
         try:
@@ -403,7 +408,7 @@ def main():
     parser.add_argument('--fetch', metavar='PATH', help='http path to datalog server')
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--dump', action='store_true')
-    parser.add_argument('--export', action='store_true')
+    parser.add_argument('--export', action='store_true', help='Export data to sqlite')
     parser.add_argument('--compact', action='store_true')
 
     global verbose
@@ -557,118 +562,48 @@ def main():
         printData()
 
 
-    outputFieldMap = {
-        "sunsynk/inverter": [
-            # 'RunState',
-            # 'ActiveEnergyToday',
-            # 'ReactiveEnergyToday',
-            # 'GridWorkTimeToday',
-            # 'ActiveEnergyTotal',
-            # 'ActiveEnergyTotalHigh',
-            # 'BatChargeToday',
-            # 'BatDischargeToday',
-            # 'BatChargeTotal',
-            # 'BatChargeTotalHigh',
-            # 'BatDischargeTotal',
-            # 'BatDischargeTotalHigh',
-            # 'GridImportToday',
-            # 'GridExportToday',
-            # 'GridFrequency',
-            # 'GridExportTotal',
-            # 'GridExportTotalHigh',
-            # 'LoadEnergyToday',
-            # 'LoadEnergyTotal',
-            # 'LoadEnergyTotalHigh',
-            'DcTemp',
-            'IgbtTemp',
-            # 'PvEnergyToday',
-            # 'Pv1Voltage',
-            # 'Pv1Current',
-            # 'Pv2Voltage',
-            # 'Pv2Current',
-            # 'GridVoltage',
-            # 'InverterVoltage',
-            # 'LoadVoltage',
-            # 'GridCurrentL1',
-            # 'InverterOutputCurrentL1',
-            'AuxPower',
-            # 'GridPowerTotal',
-            'InverterPowerTotal',
-            # 'LoadPowerTotal',
-            # 'LoadCurrentL1',
-            # 'LoadCurrentL2',
-            # 'BatteryTemp',
-            # 'BatteryVoltage',
-            # 'BatterySOC',
-            'BatteryPower',
-            # 'BatteryCurrent',
-            # 'InverterFrequency',
-            # 'GridRelayStatus',
-            # 'AuxRelayStatus',
-        ]
-    }
-
     if args.export:
-        def rnd(x):
-            return round(x * 100) / 100
+        def getSqlName(s):
+            return s.replace('/', '_')
+        def getSqlFieldName(s):
+            return f"field_{s}" if s[0].isnumeric() else s
+        tables = set()
+        con = sqlite3.connect('datalog.db')
+        cur = con.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        while True:
+            r = cur.fetchone()
+            if r is None:
+                break
+            print(r)
+            tables.add(r[0])
 
-        def writeValues(file, utc, values):
-            secs = 60 * (utc // 60)
-            file.write(time.strftime("%Y-%m-%d %H:%M", time.gmtime(secs)))
-            file.write(',')
-            file.write(",".join(str(rnd(v)) for v in values))
-            file.write("\r\n")
-
-        fieldMap = {}
-        valueMap = {}
-        fileMap = {}
-        timeMap = {}
         for entry in log.entries:
             if entry.kind != Kind.data:
                 continue
             if entry.table is None:
                 continue
-            utc = entry.getUtc()
-            fields = fieldMap.get(entry.table.name)
-            if fields is None:
-                flt = outputFieldMap.get(entry.table.name)
-                if flt is None:
-                    fields = entry.table.fields
-                else:
-                    fields = list(filter(lambda f: f.name in flt, entry.table.fields))
-                fieldMap[entry.table.name] = fields
-                valueMap[entry.table.name] = [f.getValue(entry.data) for f in fields]
-                filename = entry.table.name.replace('/', '.')
-                filename = f"data/{filename}.csv"
-                file = fileMap[entry.table.name] = open(filename, "w")
-                file.write("time,")
-                file.write(",".join(f'"{f.name}"' for f in fields))
-                file.write("\r\n")
-            else:
-                lastTime = timeMap.get(entry.table.name, 0)
-                values = valueMap[entry.table.name]
-                file = fileMap[entry.table.name]
-                try:
-                    if utc // 60 == lastTime // 60:
-                        for i, f in enumerate(fields):
-                            # print(f"{i}, {f.name}")
-                            values[i] = (values[i] + f.getValue(entry.data)) / 2
-                    else:
-                        if lastTime != 0:
-                            writeValues(file, lastTime, values)
-                        valueMap[entry.table.name] = [f.getValue(entry.data) for f in fields]
-                except:
-                    raise
-                    pass
 
-            timeMap[entry.table.name] = utc
+            tableName = getSqlName(entry.table.name)
+            if tableName not in tables:
+                fields = ", ".join(f"{getSqlFieldName(f.name)} {f.sqltype()}" for f in entry.table.fields)
+                stmt = f"CREATE TABLE {tableName}(utc DATETIME PRIMARYKEY, {fields});"
+                print(stmt)
+                cur.execute(stmt)
+                tables.add(tableName)
+                con.commit()
 
-        for d in fileMap:
-            lastTime = timeMap[d]
-            file = fileMap[d]
-            values = valueMap[d]
-            writeValues(file, lastTime, values)
+            fieldNames = ", ".join(f"{getSqlFieldName(f.name)}" for f in entry.table.fields)
+            stmt = f"INSERT INTO {getSqlName(entry.table.name)}(utc, {fieldNames}) VALUES({entry.getUtc()}, {', '.join('?' for f in entry.table.fields)});"
+            values = tuple(f.getValue(entry.data) for f in entry.table.fields)
+            if verbose:
+                print(stmt, list(values))
+            try:
+                cur.execute(stmt, values)
+            except sqlite3.OperationalError as err:
+                print(err)
 
+        con.commit()
 
 if __name__ == "__main__":
     main()
