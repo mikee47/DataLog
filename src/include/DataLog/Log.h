@@ -98,6 +98,8 @@ public:
 		return writeEntry(Info::kind, &info, sizeof(info), args...);
 	}
 
+	bool writeBoot();
+
 	int read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSize);
 
 	uint16_t getBlockSize() const

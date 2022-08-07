@@ -132,14 +132,16 @@ bool Log::init(Storage::Partition partition)
 	debug_i("[DL] endBlock #%u seq %08x", endBlock.number, endBlock.sequence);
 	debug_i("[DL] writeOffset = 0x%08x", writeOffset);
 
-	writeEntry(Entry::Kind::map, sequences, totalBlocks * sizeof(sequences[0]));
+	state = State::ready;
+	return true;
+}
 
+bool Log::writeBoot()
+{
 	Entry::Boot boot{
 		.reason = uint8_t(system_get_rst_info()->reason),
 	};
-	writeEntry(boot);
-
-	return true;
+	return writeEntry(boot);
 }
 
 bool Log::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const void* data, uint16_t dataLength)
