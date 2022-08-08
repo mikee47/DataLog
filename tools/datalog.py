@@ -617,40 +617,70 @@ def main():
         cur = con.cursor()
         timeNow = round(time.time())
         timeFrom = timeNow - (SECS_PER_HOUR * 48)
-        timeTo = timeNow - (SECS_PER_HOUR * 24)
+        timeTo = timeNow - (SECS_PER_HOUR * 0)
         cur.execute('SELECT * FROM sunsynk_inverter WHERE utc BETWEEN ? and ?;', [timeFrom, timeTo])
         data = cur.fetchall()
 
         import matplotlib as mpl
         import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
         import numpy as np
         # matplotlib.style.use('fivethirtyeight')
-        dates = []
-        pvPower = []
-        auxPower = []
-        inverterPower = []
-        lastUtc = 0
+        dateValues = []
+        pvPowerValues = []
+        auxPowerValues = []
+        inverterPowerValues = []
+        batteryPowerValues = []
+        batterySocValues = []
+        dcTempValues = []
+        igbtTempValues = []
         for row in data:
-            v = row['Pv1Voltage']
-            i = row['Pv1Current']
             utc = row[0]
-            if utc < lastUtc:
-                break
-            lastUtc = utc
-            dates.append(datetime.fromtimestamp(utc))
-            pvPower.append(v * i / 100)
-            auxPower.append(row['AuxPower'])
-            inverterPower.append(row['InverterPowerTotal'])
-        # plt.plot_date(dates, values, '-')
-        def plot(ax, values, label, params = {}):
-            ax.fill_between(dates, values, label=label, alpha=0.7, **params)
-        fig, ax = plt.subplots()
-        plot(ax, pvPower, 'PV Power')
-        plot(ax, inverterPower, 'Inverter Power')
-        plot(ax, auxPower, 'Aux Power')
-        ax.legend()
+            pv1Voltage = row['Pv1Voltage'] / 10
+            pv1Current = row['Pv1Current'] / 10
+            auxPower = row['AuxPower']
+            inverterPower = row['InverterPowerTotal']
+            batteryPower = row['BatteryPower']
+            dateValues.append(utc / SECS_PER_DAY)
+            pvPowerValues.append(pv1Voltage * pv1Current)
+            auxPowerValues.append(auxPower)
+            inverterPowerValues.append(inverterPower)
+            batteryPowerValues.append(batteryPower)
+            batterySocValues.append(row['BatterySOC'])
+            dcTempValues.append(row['DCTemp'] / 10 - 100)
+            igbtTempValues.append(row['IgbtTemp'] / 10 - 100)
+
+        fig, ax = plt.subplots(3)
+        locator = mdates.MinuteLocator()
+        formatter = mdates.AutoDateFormatter(locator)
+
+        ax[0].xaxis_date()
+        # ax[0].xaxis.set_tick_params(rotation=90)
+        ax[0].xaxis.set_major_formatter(formatter)
+        ax[0].fill_between(dateValues, pvPowerValues, label='PV Power', facecolor='blue', alpha=0.3)
+        ax[0].fill_between(dateValues, inverterPowerValues, label='Inverter Power', facecolor='red', alpha=0.3)
+        ax[0].fill_between(dateValues, auxPowerValues, label='Aux Power', facecolor='orange', alpha=0.3)
+        ax[0].fill_between(dateValues, batteryPowerValues, label='Battery Power', facecolor='green', alpha=0.3)
+        ax[0].legend()
+
+        # ax[1].xaxis.set_tick_params(rotation=90)
+        ax[1].xaxis.set_major_formatter(formatter)
+        ax[1].xaxis_date()
+        ax[1].plot(dateValues, batterySocValues, label='Battery SOC', alpha=0.3)
+        ax[1].legend()
+
+        ax[2].xaxis.set_major_formatter(formatter)
+        ax[2].xaxis_date()
+        ax[2].plot(dateValues, dcTempValues, label='DC Temp', alpha=0.3)
+        ax[2].plot(dateValues, igbtTempValues, label='IGBT Temp', alpha=0.3)
+        ax[2].legend()
+
         plt.show()
 
+        # with open("plot.csv", "w") as file:
+        #     file.write("UTC,PvPower,AuxPower,InverterPower\r\n")
+        #     for i in range(len(dates)):
+        #         file.write(f"{dates[i]},{pvPower[i]},{auxPower[i]},{inverterPower[i]}\r\n")
 
 
 if __name__ == "__main__":
