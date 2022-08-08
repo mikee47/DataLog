@@ -23,6 +23,7 @@ import argparse
 from enum import IntEnum
 import http.client, socket
 import sqlite3
+from datetime import datetime, timezone
 
 verbose = False
 
@@ -410,6 +411,7 @@ def main():
     parser.add_argument('--dump', action='store_true')
     parser.add_argument('--export', action='store_true', help='Export data to sqlite')
     parser.add_argument('--compact', action='store_true')
+    parser.add_argument('--plot', action='store_true', help='Plot some data')
 
     global verbose
 
@@ -604,6 +606,52 @@ def main():
                 print(err)
 
         con.commit()
+
+
+    SECS_PER_HOUR = 60*60
+    SECS_PER_DAY = SECS_PER_HOUR*24
+
+    if args.plot:
+        con = sqlite3.connect('datalog.db')
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        timeNow = round(time.time())
+        timeFrom = timeNow - (SECS_PER_HOUR * 48)
+        timeTo = timeNow - (SECS_PER_HOUR * 24)
+        cur.execute('SELECT * FROM sunsynk_inverter WHERE utc BETWEEN ? and ?;', [timeFrom, timeTo])
+        data = cur.fetchall()
+
+        import matplotlib as mpl
+        import matplotlib.pyplot as plt
+        import numpy as np
+        # matplotlib.style.use('fivethirtyeight')
+        dates = []
+        pvPower = []
+        auxPower = []
+        inverterPower = []
+        lastUtc = 0
+        for row in data:
+            v = row['Pv1Voltage']
+            i = row['Pv1Current']
+            utc = row[0]
+            if utc < lastUtc:
+                break
+            lastUtc = utc
+            dates.append(datetime.fromtimestamp(utc))
+            pvPower.append(v * i / 100)
+            auxPower.append(row['AuxPower'])
+            inverterPower.append(row['InverterPowerTotal'])
+        # plt.plot_date(dates, values, '-')
+        def plot(ax, values, label, params = {}):
+            ax.fill_between(dates, values, label=label, alpha=0.7, **params)
+        fig, ax = plt.subplots()
+        plot(ax, pvPower, 'PV Power')
+        plot(ax, inverterPower, 'Inverter Power')
+        plot(ax, auxPower, 'Aux Power')
+        ax.legend()
+        plt.show()
+
+
 
 if __name__ == "__main__":
     main()
