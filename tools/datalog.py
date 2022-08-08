@@ -569,17 +569,24 @@ def main():
             return s.replace('/', '_')
         def getSqlFieldName(s):
             return f"field_{s}" if s[0].isnumeric() else s
-        tables = set()
+        tables = {}
         con = sqlite3.connect('datalog.db')
         cur = con.cursor()
+        cur2 = con.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
         while True:
             r = cur.fetchone()
             if r is None:
                 break
-            print(r)
-            tables.add(r[0])
+            tableName = r[0]
+            cur2.execute(f"SELECT max(utc) FROM {tableName}")
+            r = cur2.fetchone()
+            tableInfo = dict(utc=r[0])
+            tables[tableName] = tableInfo
+            print(tableName)
 
+        exportCount = 0
+        skipCount = 0
         for entry in log.entries:
             if entry.kind != Kind.data:
                 continue
@@ -587,26 +594,41 @@ def main():
                 continue
 
             tableName = getSqlName(entry.table.name)
-            if tableName not in tables:
+            tableInfo = tables.get(tableName)
+            if tableInfo is None:
                 fields = ", ".join(f"{getSqlFieldName(f.name)} {f.sqltype()}" for f in entry.table.fields)
-                stmt = f"CREATE TABLE {tableName}(utc DATETIME PRIMARYKEY, {fields});"
+                stmt = f"CREATE TABLE {tableName}(utc DATETIME PRIMARY KEY NOT NULL, {fields});"
                 print(stmt)
                 cur.execute(stmt)
-                tables.add(tableName)
+                tableInfo = dict(utc=0)
+                tables[tableName] = tableInfo
                 con.commit()
 
+            utc =  entry.getUtc()
+            if utc <= tables[tableName]['utc']:
+                skipCount += 1
+                # print(entry)
+                # print(f"{utc}, {tables[tableName]['utc']}")
+                continue
+
             fieldNames = ", ".join(f"{getSqlFieldName(f.name)}" for f in entry.table.fields)
-            stmt = f"INSERT INTO {getSqlName(entry.table.name)}(utc, {fieldNames}) VALUES({entry.getUtc()}, {', '.join('?' for f in entry.table.fields)});"
+            stmt = f"INSERT INTO {getSqlName(entry.table.name)}(utc, {fieldNames}) VALUES({utc}, {', '.join('?' for f in entry.table.fields)});"
             values = tuple(f.getValue(entry.data) for f in entry.table.fields)
             if verbose:
                 print(stmt, list(values))
             try:
                 cur.execute(stmt, values)
-            except sqlite3.OperationalError as err:
+                tables[tableName]['utc'] = entry.getUtc()
+                exportCount += 1
+            except (sqlite3.OperationalError) as err:
                 print(err)
+                print(stmt)
+            except sqlite3.IntegrityError:
+                pass
 
         con.commit()
 
+        print(f"Exported {exportCount} entries, skipped {skipCount} existing entries")
 
     SECS_PER_HOUR = 60*60
     SECS_PER_DAY = SECS_PER_HOUR*24
@@ -615,17 +637,20 @@ def main():
         con = sqlite3.connect('datalog.db')
         con.row_factory = sqlite3.Row
         cur = con.cursor()
+
         timeNow = round(time.time())
         timeFrom = timeNow - (SECS_PER_HOUR * 48)
         timeTo = timeNow - (SECS_PER_HOUR * 0)
-        cur.execute('SELECT * FROM sunsynk_inverter WHERE utc BETWEEN ? and ?;', [timeFrom, timeTo])
+
+        # timeFrom = datetime(2022, 8, 7, 9, 0).timestamp()
+        # timeTo = datetime(2022, 8, 7, 18, 30).timestamp()
+
+        filter = f"WHERE utc BETWEEN {timeFrom} AND {timeTo}"
+        filter = ""
+
+        cur.execute(f"SELECT * FROM sunsynk_inverter {filter};")
         data = cur.fetchall()
 
-        import matplotlib as mpl
-        import matplotlib.pyplot as plt
-        import matplotlib.dates as mdates
-        import numpy as np
-        # matplotlib.style.use('fivethirtyeight')
         dateValues = []
         pvPowerValues = []
         auxPowerValues = []
@@ -635,45 +660,67 @@ def main():
         dcTempValues = []
         igbtTempValues = []
         for row in data:
-            utc = row[0]
-            pv1Voltage = row['Pv1Voltage'] / 10
-            pv1Current = row['Pv1Current'] / 10
-            auxPower = row['AuxPower']
-            inverterPower = row['InverterPowerTotal']
-            batteryPower = row['BatteryPower']
-            dateValues.append(utc / SECS_PER_DAY)
-            pvPowerValues.append(pv1Voltage * pv1Current)
-            auxPowerValues.append(auxPower)
-            inverterPowerValues.append(inverterPower)
-            batteryPowerValues.append(batteryPower)
-            batterySocValues.append(row['BatterySOC'])
-            dcTempValues.append(row['DCTemp'] / 10 - 100)
-            igbtTempValues.append(row['IgbtTemp'] / 10 - 100)
+            try:
+                utc = row[0]
+                pv1Voltage = row['Pv1Voltage'] / 10
+                pv1Current = row['Pv1Current'] / 10
+                auxPower = row['AuxPower']
+                inverterPower = row['InverterPowerTotal']
+                batteryPower = row['BatteryPower']
+                dateValues.append(utc / SECS_PER_DAY)
+                pvPowerValues.append(pv1Voltage * pv1Current)
+                auxPowerValues.append(auxPower)
+                inverterPowerValues.append(inverterPower)
+                batteryPowerValues.append(batteryPower)
+                batterySocValues.append(row['BatterySOC'])
+                dcTempValues.append(row['DCTemp'] / 10 - 100)
+                igbtTempValues.append(row['IgbtTemp'] / 10 - 100)
+            except:
+                continue
 
-        fig, ax = plt.subplots(3)
+        cur.execute(f"SELECT * FROM nt18b07_immersion {filter};")
+        data = cur.fetchall()
+
+        date2Values = []
+        tempValues = [[],[],[],[],[],[]]
+        for row in data:
+            utc = row[0]
+            date2Values.append(utc / SECS_PER_DAY)
+            for i in range(6):
+                tempValues[i].append(row[1 + i] / 10)
+
+        import matplotlib as mpl
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        fig, axes = plt.subplots(2)
         locator = mdates.MinuteLocator()
         formatter = mdates.AutoDateFormatter(locator)
 
-        ax[0].xaxis_date()
+        ax = axes[0]
+        ax.set_title('Power')
+        ax.xaxis_date()
         # ax[0].xaxis.set_tick_params(rotation=90)
-        ax[0].xaxis.set_major_formatter(formatter)
-        ax[0].fill_between(dateValues, pvPowerValues, label='PV Power', facecolor='blue', alpha=0.3)
-        ax[0].fill_between(dateValues, inverterPowerValues, label='Inverter Power', facecolor='red', alpha=0.3)
-        ax[0].fill_between(dateValues, auxPowerValues, label='Aux Power', facecolor='orange', alpha=0.3)
-        ax[0].fill_between(dateValues, batteryPowerValues, label='Battery Power', facecolor='green', alpha=0.3)
-        ax[0].legend()
+        ax.xaxis.set_major_formatter(formatter)
+        ax.set_ylabel('Power (W)')
+        ax.fill_between(dateValues, pvPowerValues, label='PV Power', facecolor='blue', alpha=0.3)
+        ax.fill_between(dateValues, inverterPowerValues, label='Inverter Power', facecolor='red', alpha=0.3)
+        ax.fill_between(dateValues, auxPowerValues, label='Aux Power', facecolor='orange', alpha=0.3)
+        ax.fill_between(dateValues, batteryPowerValues, label='Battery Power', facecolor='green', alpha=0.3)
+        ax.legend()
+        ax = axes[0].twinx()
+        ax.set_ylabel('SOC (%) & Temperature (C)')
+        ax.plot(dateValues, batterySocValues, label='Battery SOC', alpha=0.3)
+        ax.plot(dateValues, dcTempValues, label='DC Temp', alpha=0.3)
+        ax.plot(dateValues, igbtTempValues, label='IGBT Temp', alpha=0.3)
+        ax.legend()
 
-        # ax[1].xaxis.set_tick_params(rotation=90)
-        ax[1].xaxis.set_major_formatter(formatter)
-        ax[1].xaxis_date()
-        ax[1].plot(dateValues, batterySocValues, label='Battery SOC', alpha=0.3)
-        ax[1].legend()
-
-        ax[2].xaxis.set_major_formatter(formatter)
-        ax[2].xaxis_date()
-        ax[2].plot(dateValues, dcTempValues, label='DC Temp', alpha=0.3)
-        ax[2].plot(dateValues, igbtTempValues, label='IGBT Temp', alpha=0.3)
-        ax[2].legend()
+        ax = axes[1]
+        ax.set_title('Heating Temperature')
+        ax.xaxis_date()
+        ax.xaxis.set_major_formatter(formatter)
+        for i in range(len(tempValues)):
+            ax.plot(date2Values, tempValues[i], label=f"T{i+1}", alpha=0.5)
+        ax.legend()
 
         plt.show()
 
