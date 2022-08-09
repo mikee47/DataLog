@@ -667,7 +667,7 @@ def main():
                 auxPower = row['AuxPower']
                 inverterPower = row['InverterPowerTotal']
                 batteryPower = row['BatteryPower']
-                dateValues.append(utc / SECS_PER_DAY)
+                dateValues.append(datetime.fromtimestamp(utc))
                 pvPowerValues.append(pv1Voltage * pv1Current)
                 auxPowerValues.append(auxPower)
                 inverterPowerValues.append(inverterPower)
@@ -685,20 +685,22 @@ def main():
         tempValues = [[],[],[],[],[],[]]
         for row in data:
             utc = row[0]
-            date2Values.append(utc / SECS_PER_DAY)
+            date2Values.append(datetime.fromtimestamp(utc))
             for i in range(6):
                 tempValues[i].append(row[1 + i] / 10)
 
         import matplotlib as mpl
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
-        fig, axes = plt.subplots(2)
-        locator = mdates.MinuteLocator()
-        formatter = mdates.AutoDateFormatter(locator)
+        import matplotlib.widgets as mwid
+        fig, axes = plt.subplots(2, layout='tight')
+        locator = mdates.SecondLocator()
+        formatter = mdates.ConciseDateFormatter(locator)
 
         ax = axes[0]
         ax.set_title('Power')
-        ax.xaxis_date()
+        # ax.xaxis_date()
+        # ax.grid(True)
         # ax[0].xaxis.set_tick_params(rotation=90)
         ax.xaxis.set_major_formatter(formatter)
         ax.set_ylabel('Power (W)')
@@ -706,21 +708,21 @@ def main():
         ax.fill_between(dateValues, inverterPowerValues, label='Inverter Power', facecolor='red', alpha=0.3)
         ax.fill_between(dateValues, auxPowerValues, label='Aux Power', facecolor='orange', alpha=0.3)
         ax.fill_between(dateValues, batteryPowerValues, label='Battery Power', facecolor='green', alpha=0.3)
-        ax.legend()
+        ax.legend(loc='upper left')
         ax = axes[0].twinx()
         ax.set_ylabel('SOC (%) & Temperature (C)')
         ax.plot(dateValues, batterySocValues, label='Battery SOC', alpha=0.3)
         ax.plot(dateValues, dcTempValues, label='DC Temp', alpha=0.3)
         ax.plot(dateValues, igbtTempValues, label='IGBT Temp', alpha=0.3)
-        ax.legend()
+        ax.legend(loc='upper right')
 
         ax = axes[1]
         ax.set_title('Heating Temperature')
-        ax.xaxis_date()
+        # ax.xaxis_date()
         ax.xaxis.set_major_formatter(formatter)
         for i in range(len(tempValues)):
             ax.plot(date2Values, tempValues[i], label=f"T{i+1}", alpha=0.5)
-        ax.legend()
+        ax.legend(loc='upper left')
 
         plt.show()
 
