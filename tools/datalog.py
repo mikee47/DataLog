@@ -18,7 +18,7 @@
 # If not, see <https://www.gnu.org/licenses/>.
 #
 
-import os, json, sys, struct, time, array
+import os, json, sys, struct, time, array, bisect
 import argparse
 from enum import IntEnum
 import http.client, socket
@@ -30,6 +30,11 @@ verbose = False
 FILE_DATALOG = "logs/datalog-%08x-%08x.bin"
 FILE_NEXTSEQ = "logs/next.seq"
 FILE_TAIL = "logs/tail.bin"
+
+def printProperties(obj):
+    print(f"Properties for {type(obj)}:")
+    for prop, val in vars(obj).items():
+        print(f"  {prop} = {val}")
 
 
 class Kind(IntEnum):
@@ -565,22 +570,12 @@ def main():
 
 
     if args.export:
-        def getSqlName(s):
-            return s.replace('/', '_')
-        def getSqlFieldName(s):
-            return f"field_{s}" if s[0].isnumeric() else s
         tables = {}
         con = sqlite3.connect('datalog.db')
-        cur = con.cursor()
-        cur2 = con.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        while True:
-            r = cur.fetchone()
-            if r is None:
-                break
+        cur = con.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        for r in cur:
             tableName = r[0]
-            cur2.execute(f"SELECT max(utc) FROM {tableName}")
-            r = cur2.fetchone()
+            r = con.execute(f"SELECT max(utc) FROM [{tableName}]").fetchone()
             tableInfo = dict(utc=r[0])
             tables[tableName] = tableInfo
             print(tableName)
@@ -588,18 +583,17 @@ def main():
         exportCount = 0
         skipCount = 0
         for entry in log.entries:
-            if entry.kind != Kind.data:
-                continue
-            if entry.table is None:
+            if entry.kind != Kind.data or entry.table is None:
                 continue
 
-            tableName = getSqlName(entry.table.name)
+            tableName = entry.table.name
+            fields = entry.table.fields
             tableInfo = tables.get(tableName)
             if tableInfo is None:
-                fields = ", ".join(f"{getSqlFieldName(f.name)} {f.sqltype()}" for f in entry.table.fields)
-                stmt = f"CREATE TABLE {tableName}(utc DATETIME PRIMARY KEY NOT NULL, {fields});"
+                columnDefs = ", ".join(f"[{f.name}] {f.sqltype()}" for f in fields)
+                stmt = f"CREATE TABLE [{tableName}](utc DATETIME PRIMARY KEY NOT NULL, {columnDefs});"
                 print(stmt)
-                cur.execute(stmt)
+                con.execute(stmt)
                 tableInfo = dict(utc=0)
                 tables[tableName] = tableInfo
                 con.commit()
@@ -611,13 +605,13 @@ def main():
                 # print(f"{utc}, {tables[tableName]['utc']}")
                 continue
 
-            fieldNames = ", ".join(f"{getSqlFieldName(f.name)}" for f in entry.table.fields)
-            stmt = f"INSERT INTO {getSqlName(entry.table.name)}(utc, {fieldNames}) VALUES({utc}, {', '.join('?' for f in entry.table.fields)});"
-            values = tuple(f.getValue(entry.data) for f in entry.table.fields)
+            columnNames = ", ".join(f"[{f.name}]" for f in fields)
+            stmt = f"INSERT INTO [{tableName}](utc, {columnNames}) VALUES({utc}, {', '.join('?' for f in fields)});"
+            values = tuple(f.getValue(entry.data) for f in fields)
             if verbose:
                 print(stmt, list(values))
             try:
-                cur.execute(stmt, values)
+                con.execute(stmt, values)
                 tables[tableName]['utc'] = entry.getUtc()
                 exportCount += 1
             except (sqlite3.OperationalError) as err:
@@ -635,21 +629,39 @@ def main():
 
     if args.plot:
         con = sqlite3.connect('datalog.db')
-        con.row_factory = sqlite3.Row
-        cur = con.cursor()
 
         timeNow = round(time.time())
-        timeFrom = timeNow - (SECS_PER_HOUR * 48)
+        timeFrom = timeNow - (SECS_PER_HOUR * 96)
         timeTo = timeNow - (SECS_PER_HOUR * 0)
 
         # timeFrom = datetime(2022, 8, 7, 9, 0).timestamp()
         # timeTo = datetime(2022, 8, 7, 18, 30).timestamp()
 
         filter = f"WHERE utc BETWEEN {timeFrom} AND {timeTo}"
-        filter = ""
+        # filter = ""
 
-        cur.execute(f"SELECT * FROM sunsynk_inverter {filter};")
-        data = cur.fetchall()
+        # cur = con.execute(f"SELECT * FROM sunsynk_inverter {filter};")
+        # cur = con.execute(f"select "\
+        #     f"(CAST(utc AS INT) - (utc % 60)) AS utcMinute, "\
+        #     f"CAST(round(avg(Pv1Voltage * Pv1Current / 100)) AS INT) AS Pv1Power, "\
+        #     f"CAST(avg(AuxPower) AS INT) AS AuxPower, "\
+        #     f"CAST(avg(InverterPowerTotal) AS INT) AS InverterPower, "\
+        #     f"CAST(avg(BatteryPower) AS INT) AS BatteryPower, "\
+        #     f"CAST(avg(BatterySOC) AS INT) AS BatterySOC, "\
+        #     f"CAST(avg(DCTemp / 10 - 100) AS INT) AS DCTemp, "\
+        #     f"CAST(avg(IgbtTemp / 10 - 100) AS INT) AS IgbtTemp "\
+        #     f"from sunsynk_inverter {filter} GROUP BY utcMinute;")
+
+        cur = con.execute("SELECT "\
+            "utc, "\
+            "CAST(round(Pv1Voltage * Pv1Current / 100) AS INT) AS Pv1Power, "\
+            "AuxPower, "\
+            "InverterPowerTotal, "\
+            "BatteryPower, "\
+            "BatterySOC, "\
+            "CAST(DCTemp / 10 - 100 AS INT) AS DCTemp, "\
+            "CAST(IgbtTemp / 10 - 100 AS INT) AS IgbtTemp "\
+            "from sunsynk_inverter " + filter + ";")
 
         dateValues = []
         pvPowerValues = []
@@ -659,31 +671,26 @@ def main():
         batterySocValues = []
         dcTempValues = []
         igbtTempValues = []
-        for row in data:
+        for row in cur:
             try:
-                utc = row[0]
-                pv1Voltage = row['Pv1Voltage'] / 10
-                pv1Current = row['Pv1Current'] / 10
-                auxPower = row['AuxPower']
-                inverterPower = row['InverterPowerTotal']
-                batteryPower = row['BatteryPower']
-                dateValues.append(datetime.fromtimestamp(utc))
-                pvPowerValues.append(pv1Voltage * pv1Current)
-                auxPowerValues.append(auxPower)
-                inverterPowerValues.append(inverterPower)
-                batteryPowerValues.append(batteryPower)
-                batterySocValues.append(row['BatterySOC'])
-                dcTempValues.append(row['DCTemp'] / 10 - 100)
-                igbtTempValues.append(row['IgbtTemp'] / 10 - 100)
-            except:
+                dateValues.append(datetime.fromtimestamp(row[0]))
+                pvPowerValues.append(row[1])
+                auxPowerValues.append(row[2])
+                inverterPowerValues.append(row[3])
+                batteryPowerValues.append(row[4])
+                batterySocValues.append(row[5])
+                dcTempValues.append(row[6])
+                igbtTempValues.append(row[7])
+            except err:
+                print(err)
                 continue
 
-        cur.execute(f"SELECT * FROM nt18b07_immersion {filter};")
-        data = cur.fetchall()
+        print(f"{len(dateValues)} inverter data points")
 
+        cur.execute(f"SELECT * FROM nt18b07_immersion {filter};")
         date2Values = []
         tempValues = [[],[],[],[],[],[]]
-        for row in data:
+        for row in cur:
             utc = row[0]
             date2Values.append(datetime.fromtimestamp(utc))
             for i in range(6):
@@ -693,7 +700,11 @@ def main():
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
         import matplotlib.widgets as mwid
+        if sys.platform == 'win32':
+            mpl.use('TkAgg')
+        print(f"Backend: {mpl.get_backend()}")
         fig, axes = plt.subplots(2, layout='tight')
+        fig.suptitle('Solar Hub')
         locator = mdates.SecondLocator()
         formatter = mdates.ConciseDateFormatter(locator)
 
@@ -724,12 +735,39 @@ def main():
             ax.plot(date2Values, tempValues[i], label=f"T{i+1}", alpha=0.5)
         ax.legend(loc='upper left')
 
+        def onmotion(event):
+            xdata = event.xdata
+            if xdata is None:
+                return
+            dt = datetime.utcfromtimestamp(xdata * SECS_PER_DAY)
+            i = bisect.bisect_left(dateValues, dt)
+            if i >= len(dateValues):
+                return
+            print(f"{xdata}, {dt}, {dateValues[i]}")
+            dt = dateValues[i]
+            traces = {
+                "PV Power": pvPowerValues,
+                "Aux Power": auxPowerValues,
+                "Inverter Power": inverterPowerValues,
+                "Battery Power": batteryPowerValues,
+                "Battery SOC": batterySocValues,
+                "DC Temp": dcTempValues,
+                "IGBT Temp": igbtTempValues,
+            }
+            for label, values in traces.items():
+                print(f"  {label}: {values[i]}")
+
+        fig.canvas.mpl_connect('motion_notify_event', onmotion)
+
+        multi = mwid.MultiCursor(fig.canvas, axes, color='g', horizOn=False, vertOn=True)
         plt.show()
 
         # with open("plot.csv", "w") as file:
         #     file.write("UTC,PvPower,AuxPower,InverterPower\r\n")
         #     for i in range(len(dates)):
         #         file.write(f"{dates[i]},{pvPower[i]},{auxPower[i]},{inverterPower[i]}\r\n")
+
+
 
 
 if __name__ == "__main__":
