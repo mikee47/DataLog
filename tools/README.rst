@@ -19,12 +19,12 @@ Functions required
    - Keep status file
 
 - Schema and value unit support
-   - Describe domains, fields by name
+   - Describe tables, fields by name
    - Indicate scale, unit of measurement as per Sunsynk
    - Generate header files instead of using MAP(XX) macros
 
 - Index (sqlite3 database)
-   - Access records by date/time, domain, etc.
+   - Access records by date/time, table, etc.
 
 - Home Assistant (for example)
    - Create plugin to access data

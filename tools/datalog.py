@@ -1,7 +1,21 @@
 #
 #!/usr/bin/env python3
 #
-# Script to manage data logs
+# DataLog.py: Script to manage data logs
+#
+# Copyright 2022 mikee47 <mike@sillyhouse.net>
+#
+# This file is part of the DataLog Library
+#
+# This library is free software: you can redistribute it and/or modify it under the terms of the
+# GNU General Public License as published by the Free Software Foundation, version 3 or later.
+#
+# This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+# without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with this library.
+# If not, see <https://www.gnu.org/licenses/>.
 #
 
 import os, json, sys, struct, time, array
@@ -21,7 +35,7 @@ class Kind(IntEnum):
     block = 1,      # Identifies start of block
     boot = 2,       # System boot
     time = 3,       # Contains RTC value and corresponding system time
-    domain = 4,     # Qualifies following fields (e.g. name of device)
+    table = 4,     # Qualifies following fields (e.g. name of device)
     field = 5,      # Field identification record
     data = 6,       # Data record
     exception = 7,  # Exception information
@@ -45,7 +59,7 @@ class Entry:
         map = {
             Kind.boot: Boot,
             Kind.time: Time,
-            Kind.domain: Domain,
+            Kind.table: Table,
             Kind.field: Field,
             Kind.data: Data,
             Kind.exception: Exception,
@@ -128,16 +142,16 @@ class Time(Entry):
         return self.utc + (systemTime - self.systemTime) / 1000
 
 
-class Domain(Entry):
+class Table(Entry):
     def __init__(self, content, ctx):
-        self.kind = Kind.domain
+        self.kind = Kind.table
         (self.id,) = struct.unpack("<H", content[:2])
         self.name = content[2:].decode()
         self.fields = []
         self.dataEntryCount = 0
         self.fieldDataSize = 0
-        ctx.domains[self.id] = self
-        ctx.domain = self
+        ctx.tables[self.id] = self
+        ctx.table = self
 
     def __str__(self):
         return "id %u, name '%s'" % (self.id, self.name)
@@ -166,15 +180,15 @@ class Field(Entry):
 
     def __init__(self, content, ctx):
         self.kind = Kind.field
-        self.domain = ctx.domain
+        self.table = ctx.table
         (self.id, type, self.size) = struct.unpack("<HBB", content[:4])
         self.type = type & 0x7f
         self.isVariable = (type & 0x80) != 0
         self.name = content[4:].decode()
-        if self.domain is not None:
-            self.offset = self.domain.fieldDataSize
-            self.domain.fieldDataSize += 2 if self.isVariable else self.size
-            self.domain.fields.append(self)
+        if self.table is not None:
+            self.offset = self.table.fieldDataSize
+            self.table.fieldDataSize += 2 if self.isVariable else self.size
+            self.table.fields.append(self)
 
     def typestr(self):
         t = Field.typemap.get((self.type, self.size))
@@ -191,9 +205,9 @@ class Field(Entry):
             (value,) = struct.unpack(f"<{fmt}", data[self.offset:self.offset+self.size])
             return value
         len = 0
-        off = self.domain.fieldDataSize
+        off = self.table.fieldDataSize
         value = None
-        for f in self.domain.fields:
+        for f in self.table.fields:
             if not f.isVariable:
                 continue
             (len,) = struct.unpack("<H", data[f.offset:f.offset+2])
@@ -208,7 +222,7 @@ class Field(Entry):
         return value
 
     def __str__(self):
-        s = "?" if self.domain is None else self.domain.name
+        s = "?" if self.table is None else self.table.name
         s += f", id {self.id}, {self.typestr()}, name '{self.name}'"
         return s
 
@@ -218,7 +232,7 @@ class Data(Entry):
         self.kind = Kind.data
         self.time = ctx.time
         (self.systemTime, self.domain_id, self.reserved) = struct.unpack("<IHH", content[:8])
-        self.domain = ctx.domains.get(self.domain_id)
+        self.table = ctx.tables.get(self.domain_id)
         self.data = content[8:]
 
         self.systemTime = ctx.checkTime(self.systemTime)
@@ -230,12 +244,12 @@ class Data(Entry):
         s = f"systemTime {self.systemTime}"
         if self.time:
             s += f", {timestr(self.getUtc())}"
-        if self.domain is None:
-            s += f", domain {self.domain_id}, {len(self.data)} bytes: "
+        if self.table is None:
+            s += f", table {self.domain_id}, {len(self.data)} bytes: "
             s += " ".join("%02x" % x for x in self.data)
         else:
-            s += f", domain {self.domain}: "
-            s += ", ".join(str(f.getValue(self.data)) for f in self.domain.fields)
+            s += f", table {self.table}: "
+            s += ", ".join(str(f.getValue(self.data)) for f in self.table.fields)
         return s
 
     def fixup(self, ctx):
@@ -346,8 +360,8 @@ class DataLog:
 
     def reset(self):
         self.time = None
-        self.domains = {}
-        self.domain = None
+        self.tables = {}
+        self.table = None
         self.prevSystemTime = 0
         self.highTime = 0 # Compensate for incorrect time wrapping
 
@@ -532,8 +546,8 @@ def main():
             # printData()
             # dataCount = 0
             print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {str(entry.kind)}: {entry}")
-            # if entry.kind == Kind.data and entry.domain is not None:
-            #     for f in entry.domain.fields:
+            # if entry.kind == Kind.data and entry.table is not None:
+            #     for f in entry.table.fields:
             #         print(f"{f.name}[{f.id}] = {f.getValue(entry.data)}")
 
         printData()
@@ -608,28 +622,28 @@ def main():
         for entry in log.entries:
             if entry.kind != Kind.data:
                 continue
-            if entry.domain is None:
+            if entry.table is None:
                 continue
             utc = entry.getUtc()
-            fields = fieldMap.get(entry.domain.name)
+            fields = fieldMap.get(entry.table.name)
             if fields is None:
-                flt = outputFieldMap.get(entry.domain.name)
+                flt = outputFieldMap.get(entry.table.name)
                 if flt is None:
-                    fields = entry.domain.fields
+                    fields = entry.table.fields
                 else:
-                    fields = list(filter(lambda f: f.name in flt, entry.domain.fields))
-                fieldMap[entry.domain.name] = fields
-                valueMap[entry.domain.name] = [f.getValue(entry.data) for f in fields]
-                filename = entry.domain.name.replace('/', '.')
+                    fields = list(filter(lambda f: f.name in flt, entry.table.fields))
+                fieldMap[entry.table.name] = fields
+                valueMap[entry.table.name] = [f.getValue(entry.data) for f in fields]
+                filename = entry.table.name.replace('/', '.')
                 filename = f"data/{filename}.csv"
-                file = fileMap[entry.domain.name] = open(filename, "w")
+                file = fileMap[entry.table.name] = open(filename, "w")
                 file.write("time,")
                 file.write(",".join(f'"{f.name}"' for f in fields))
                 file.write("\r\n")
             else:
-                lastTime = timeMap.get(entry.domain.name, 0)
-                values = valueMap[entry.domain.name]
-                file = fileMap[entry.domain.name]
+                lastTime = timeMap.get(entry.table.name, 0)
+                values = valueMap[entry.table.name]
+                file = fileMap[entry.table.name]
                 try:
                     if utc // 60 == lastTime // 60:
                         for i, f in enumerate(fields):
@@ -638,12 +652,12 @@ def main():
                     else:
                         if lastTime != 0:
                             writeValues(file, lastTime, values)
-                        valueMap[entry.domain.name] = [f.getValue(entry.data) for f in fields]
+                        valueMap[entry.table.name] = [f.getValue(entry.data) for f in fields]
                 except:
                     raise
                     pass
 
-            timeMap[entry.domain.name] = utc
+            timeMap[entry.table.name] = utc
 
         for d in fileMap:
             lastTime = timeMap[d]
