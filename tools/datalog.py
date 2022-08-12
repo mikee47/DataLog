@@ -135,9 +135,9 @@ class Domain(Entry):
         self.name = content[2:].decode()
         self.fields = []
         self.dataEntryCount = 0
+        self.fieldDataSize = 0
         ctx.domains[self.id] = self
         ctx.domain = self
-        ctx.fieldOffset = 0
 
     def __str__(self):
         return "id %u, name '%s'" % (self.id, self.name)
@@ -148,6 +148,7 @@ class Field(Entry):
         Unsigned = 0,
         Signed = 1,
         Float = 2,
+        Char = 3,
 
     typemap = {
         (Type.Float, 4): ("float", "f"),
@@ -160,16 +161,19 @@ class Field(Entry):
         (Type.Signed, 2): ("int16_t", "h"),
         (Type.Signed, 4): ("int32_t", "i"),
         (Type.Signed, 8): ("int64_t", "q"),
+        (Type.Char, 1): ("char", "s"),
     }
 
     def __init__(self, content, ctx):
         self.kind = Kind.field
         self.domain = ctx.domain
-        (self.id, self.type, self.size) = struct.unpack("<HBB", content[:4])
+        (self.id, type, self.size) = struct.unpack("<HBB", content[:4])
+        self.type = type & 0x7f
+        self.isVariable = (type & 0x80) != 0
         self.name = content[4:].decode()
-        self.offset = ctx.fieldOffset
-        ctx.fieldOffset += self.size
         if self.domain is not None:
+            self.offset = self.domain.fieldDataSize
+            self.domain.fieldDataSize += 2 if self.isVariable else self.size
             self.domain.fields.append(self)
 
     def typestr(self):
@@ -178,13 +182,30 @@ class Field(Entry):
 
     def getValue(self, data):
         try:
-            fmt = "<" + Field.typemap[(self.type, self.size)][1]
+            fmt = Field.typemap[(self.type, self.size)][1]
         except:
             print(self.__dict__)
             print(f"type {self.type}, size {self.size}, name {self.name}")
             return 0
-        (value,) = struct.unpack(fmt, data[self.offset:self.offset+self.size])
-        return round(value, 3)
+        if not self.isVariable:
+            (value,) = struct.unpack(f"<{fmt}", data[self.offset:self.offset+self.size])
+            return value
+        len = 0
+        off = self.domain.fieldDataSize
+        value = None
+        for f in self.domain.fields:
+            if not f.isVariable:
+                continue
+            (len,) = struct.unpack("<H", data[f.offset:f.offset+2])
+            len *= f.size
+            if f is self:
+                if fmt == 's':
+                    value = data[off:off+len].decode()
+                else:
+                    value = array.array(fmt, data[off:off+len])
+                break
+            off += len
+        return value
 
     def __str__(self):
         s = "?" if self.domain is None else self.domain.name
@@ -327,7 +348,6 @@ class DataLog:
         self.time = None
         self.domains = {}
         self.domain = None
-        self.fieldOffset = 0
         self.prevSystemTime = 0
         self.highTime = 0 # Compensate for incorrect time wrapping
 
