@@ -328,7 +328,7 @@ class BlockList(dict):
         if verbose:
             print(f"Scanning '{os.path.basename(filename)}', {fileSize} bytes, {(fileSize + Block.SIZE - 1) // Block.SIZE} blocks, {ft}")
         if fileSize % Block.SIZE != 0:
-            print("WARNING! File size is not a multiple of block size")
+            print(f"WARNING! File '{os.path.basename(filename)}' size {fileSize:#x} is not a multiple of block size {Block.SIZE:#x}")
 
         dupes = 0
         blockCount = 0
@@ -362,6 +362,7 @@ class BlockList(dict):
 
 class DataLog:
     def __init__(self):
+        self.lastBlock = None
         self.entries = []
         self.reset()
 
@@ -381,6 +382,13 @@ class DataLog:
 
     def loadBlock(self, block):
         off = 0
+        if self.lastBlock is not None:
+            if block.sequence < self.lastBlock.sequence:
+                return
+            if block.sequence == self.lastBlock.sequence:
+                off = len(self.lastBlock.content)
+        self.lastBlock = block
+
         while off < len(block.content):
             # print(f"offset {12+off:#x}: {' '.join(hex(x) for x in block.content[off:off+8])}")
             entry, size = Entry.read(block, off, self)
@@ -403,6 +411,26 @@ class DataLog:
 
             self.entries.append(entry)
 
+    def saveContext(self, filename):
+         with open(filename, "wb") as f:
+            pickle.dump(self.time, f)
+            pickle.dump(self.prevSystemTime, f)
+            pickle.dump(self.highTime, f)
+            pickle.dump(self.lastBlock, f)
+            pickle.dump(self.tables, f)
+
+    def loadContext(self, filename):
+        try:
+            with open(filename, "rb") as f:
+                self.time = pickle.load(f)
+                self.prevSystemTime = pickle.load(f)
+                self.highTime = pickle.load(f)
+                self.lastBlock = pickle.load(f)
+                self.tables = pickle.load(f)
+            if verbose:
+                print(f"lastBlock = {self.lastBlock.sequence:#x}, {len(self.lastBlock.content)}")
+        except FileNotFoundError:
+            pass
 
 def main():
     parser = argparse.ArgumentParser(description='DataLog tool')
@@ -460,17 +488,19 @@ def main():
 
     if len(blocks) == 0:
         lastBlock = 0
+        print("No blocks loaded")
     else:
         seq = sorted(blocks.keys())
+        print(f"{len(blocks)} blocks loaded ({seq[0]:#x} - {seq[len(seq)-1]:#x})")
+        missing = []
         cur = seq[0]
         for n in seq[1:]:
             cur += 1
             while n != cur:
-                print(f"Missing {cur:#x}")
+                missing.append(cur)
                 cur += 1
-        lastBlock = seq[len(seq)-1]
-        print(f"lastBlock {lastBlock} ({lastBlock:#x})")
-        # print("\r\n".join(str(n) for n in seq))
+        if missing:
+            print(f"{len(missing)} blocks missing: ", ", ".join(hex(x) for x in missing))
 
     if args.fetch:
         print(f"FETCH {args.fetch}")
@@ -539,9 +569,11 @@ def main():
 
     if args.dump or args.export:
         log = DataLog()
+        log.loadContext('context.bin')
         for b in sorted(blocks):
             log.loadBlock(blocks[b])
-        print(f"{len(log.entries)} entries loaded")
+        print(f"{len(log.entries)} new entries loaded")
+        log.saveContext('context.bin')
 
     if args.dump:
         dataCount = 0
@@ -551,11 +583,6 @@ def main():
                 print(f"Kind.data x {dataCount}")
 
         for entry in log.entries:
-            # if entry.kind == Kind.data:
-            #     dataCount += 1
-            #     continue
-            # printData()
-            # dataCount = 0
             print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {str(entry.kind)}: {entry}")
             if verbose and entry.kind == Kind.data and entry.table is not None:
                 for f in entry.table.fields:
@@ -573,7 +600,6 @@ def main():
             r = con.execute(f"SELECT max(utc) FROM [{tableName}]").fetchone()
             tableInfo = dict(utc=r[0])
             tables[tableName] = tableInfo
-            print(tableName)
 
         exportCount = 0
         skipCount = 0
@@ -596,8 +622,6 @@ def main():
             utc =  entry.getUtc()
             if utc <= tables[tableName]['utc']:
                 skipCount += 1
-                # print(entry)
-                # print(f"{utc}, {tables[tableName]['utc']}")
                 continue
 
             columnNames = ", ".join(f"[{f.name}]" for f in fields)
@@ -617,7 +641,8 @@ def main():
 
         con.commit()
 
-        print(f"Exported {exportCount} entries, skipped {skipCount} existing entries")
+        print(f"{exportCount} entries exported")
+        print(f"{skipCount} existing entries skipped")
 
 
 if __name__ == "__main__":
