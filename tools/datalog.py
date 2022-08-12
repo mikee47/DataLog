@@ -18,12 +18,8 @@
 # If not, see <https://www.gnu.org/licenses/>.
 #
 
-import os, json, sys, struct, time, array, bisect
-import argparse
+import os, json, sys, struct, time, array, argparse, pickle, sqlite3, http.client, socket
 from enum import IntEnum
-import http.client, socket
-import sqlite3
-from datetime import datetime, timezone
 
 verbose = False
 
@@ -416,7 +412,6 @@ def main():
     parser.add_argument('--dump', action='store_true')
     parser.add_argument('--export', action='store_true', help='Export data to sqlite')
     parser.add_argument('--compact', action='store_true')
-    parser.add_argument('--plot', action='store_true', help='Plot some data')
 
     global verbose
 
@@ -623,151 +618,6 @@ def main():
         con.commit()
 
         print(f"Exported {exportCount} entries, skipped {skipCount} existing entries")
-
-    SECS_PER_HOUR = 60*60
-    SECS_PER_DAY = SECS_PER_HOUR*24
-
-    if args.plot:
-        con = sqlite3.connect('datalog.db')
-
-        timeNow = round(time.time())
-        timeFrom = timeNow - (SECS_PER_HOUR * 96)
-        timeTo = timeNow - (SECS_PER_HOUR * 0)
-
-        # timeFrom = datetime(2022, 8, 7, 9, 0).timestamp()
-        # timeTo = datetime(2022, 8, 7, 18, 30).timestamp()
-
-        filter = f"WHERE utc BETWEEN {timeFrom} AND {timeTo}"
-        # filter = ""
-
-        # cur = con.execute(f"SELECT * FROM sunsynk_inverter {filter};")
-        # cur = con.execute(f"select "\
-        #     f"(CAST(utc AS INT) - (utc % 60)) AS utcMinute, "\
-        #     f"CAST(round(avg(Pv1Voltage * Pv1Current / 100)) AS INT) AS Pv1Power, "\
-        #     f"CAST(avg(AuxPower) AS INT) AS AuxPower, "\
-        #     f"CAST(avg(InverterPowerTotal) AS INT) AS InverterPower, "\
-        #     f"CAST(avg(BatteryPower) AS INT) AS BatteryPower, "\
-        #     f"CAST(avg(BatterySOC) AS INT) AS BatterySOC, "\
-        #     f"CAST(avg(DCTemp / 10 - 100) AS INT) AS DCTemp, "\
-        #     f"CAST(avg(IgbtTemp / 10 - 100) AS INT) AS IgbtTemp "\
-        #     f"from sunsynk_inverter {filter} GROUP BY utcMinute;")
-
-        cur = con.execute("SELECT "\
-            "utc, "\
-            "CAST(round(Pv1Voltage * Pv1Current / 100) AS INT) AS Pv1Power, "\
-            "AuxPower, "\
-            "InverterPowerTotal, "\
-            "BatteryPower, "\
-            "BatterySOC, "\
-            "CAST(DCTemp / 10 - 100 AS INT) AS DCTemp, "\
-            "CAST(IgbtTemp / 10 - 100 AS INT) AS IgbtTemp "\
-            "from sunsynk_inverter " + filter + ";")
-
-        dateValues = []
-        pvPowerValues = []
-        auxPowerValues = []
-        inverterPowerValues = []
-        batteryPowerValues = []
-        batterySocValues = []
-        dcTempValues = []
-        igbtTempValues = []
-        for row in cur:
-            try:
-                dateValues.append(datetime.fromtimestamp(row[0]))
-                pvPowerValues.append(row[1])
-                auxPowerValues.append(row[2])
-                inverterPowerValues.append(row[3])
-                batteryPowerValues.append(row[4])
-                batterySocValues.append(row[5])
-                dcTempValues.append(row[6])
-                igbtTempValues.append(row[7])
-            except err:
-                print(err)
-                continue
-
-        print(f"{len(dateValues)} inverter data points")
-
-        cur.execute(f"SELECT * FROM nt18b07_immersion {filter};")
-        date2Values = []
-        tempValues = [[],[],[],[],[],[]]
-        for row in cur:
-            utc = row[0]
-            date2Values.append(datetime.fromtimestamp(utc))
-            for i in range(6):
-                tempValues[i].append(row[1 + i] / 10)
-
-        import matplotlib as mpl
-        import matplotlib.pyplot as plt
-        import matplotlib.dates as mdates
-        import matplotlib.widgets as mwid
-        if sys.platform == 'win32':
-            mpl.use('TkAgg')
-        print(f"Backend: {mpl.get_backend()}")
-        fig, axes = plt.subplots(2, layout='tight')
-        fig.suptitle('Solar Hub')
-        locator = mdates.SecondLocator()
-        formatter = mdates.ConciseDateFormatter(locator)
-
-        ax = axes[0]
-        ax.set_title('Power')
-        # ax.xaxis_date()
-        # ax.grid(True)
-        # ax[0].xaxis.set_tick_params(rotation=90)
-        ax.xaxis.set_major_formatter(formatter)
-        ax.set_ylabel('Power (W)')
-        ax.fill_between(dateValues, pvPowerValues, label='PV Power', facecolor='blue', alpha=0.3)
-        ax.fill_between(dateValues, inverterPowerValues, label='Inverter Power', facecolor='red', alpha=0.3)
-        ax.fill_between(dateValues, auxPowerValues, label='Aux Power', facecolor='orange', alpha=0.3)
-        ax.fill_between(dateValues, batteryPowerValues, label='Battery Power', facecolor='green', alpha=0.3)
-        ax.legend(loc='upper left')
-        ax = axes[0].twinx()
-        ax.set_ylabel('SOC (%) & Temperature (C)')
-        ax.plot(dateValues, batterySocValues, label='Battery SOC', alpha=0.3)
-        ax.plot(dateValues, dcTempValues, label='DC Temp', alpha=0.3)
-        ax.plot(dateValues, igbtTempValues, label='IGBT Temp', alpha=0.3)
-        ax.legend(loc='upper right')
-
-        ax = axes[1]
-        ax.set_title('Heating Temperature')
-        # ax.xaxis_date()
-        ax.xaxis.set_major_formatter(formatter)
-        for i in range(len(tempValues)):
-            ax.plot(date2Values, tempValues[i], label=f"T{i+1}", alpha=0.5)
-        ax.legend(loc='upper left')
-
-        def onmotion(event):
-            xdata = event.xdata
-            if xdata is None:
-                return
-            dt = datetime.utcfromtimestamp(xdata * SECS_PER_DAY)
-            i = bisect.bisect_left(dateValues, dt)
-            if i >= len(dateValues):
-                return
-            print(f"{xdata}, {dt}, {dateValues[i]}")
-            dt = dateValues[i]
-            traces = {
-                "PV Power": pvPowerValues,
-                "Aux Power": auxPowerValues,
-                "Inverter Power": inverterPowerValues,
-                "Battery Power": batteryPowerValues,
-                "Battery SOC": batterySocValues,
-                "DC Temp": dcTempValues,
-                "IGBT Temp": igbtTempValues,
-            }
-            for label, values in traces.items():
-                print(f"  {label}: {values[i]}")
-
-        fig.canvas.mpl_connect('motion_notify_event', onmotion)
-
-        multi = mwid.MultiCursor(fig.canvas, axes, color='g', horizOn=False, vertOn=True)
-        plt.show()
-
-        # with open("plot.csv", "w") as file:
-        #     file.write("UTC,PvPower,AuxPower,InverterPower\r\n")
-        #     for i in range(len(dates)):
-        #         file.write(f"{dates[i]},{pvPower[i]},{auxPower[i]},{inverterPower[i]}\r\n")
-
-
 
 
 if __name__ == "__main__":
