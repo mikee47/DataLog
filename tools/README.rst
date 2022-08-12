@@ -32,12 +32,19 @@ Functions required
    - Build data records as required, e.g. energy usage from low/high registers converted into kWh figure
    - Don't copy actual data into database unless necessary
 
+- Convert from .csv into blocks
+   - e.g. Tigo spreadsheets, Sunsynk logger data
+   - More suitable archive format
+   - Single source for all related data
+
 
 Consider
 --------
 
 - Reduce block size to one flash sector
    - 12 byte header every 4096 is fine
+   - Reduces minimum flash requirement to 2 flash sectors (8K) for low-throughput logs, e.g. critical system log
+   - Multiple logs may be appropriate
 
 - Split entries across block boundary
    - Reduce wasted space for large data records
