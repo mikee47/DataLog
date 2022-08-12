@@ -39,6 +39,11 @@ public:
      */
 	using SystemTime = uint32_t;
 
+	/**
+	 * @brief Variable-length data 
+	 */
+	using Size = uint16_t;
+
 #define DATALOG_ENTRY_KIND_MAP(XX)                                                                                     \
 	XX(pad, 0, "Unused padding")                                                                                       \
 	XX(block, 1, "Identifies start of block")                                                                          \
@@ -70,7 +75,7 @@ public:
          * @brief Header is exactly one word in size so it can be written atomically
          */
 		struct Header {
-			uint16_t size; ///< Size of content, excluding this header
+			Size size; ///< Size of content, excluding this header
 			Kind kind;
 			Flags flags;
 		};
@@ -144,7 +149,6 @@ public:
 			ID id;		 ///< Identifier
 			char name[]; ///< e.g. name of device, no NUL
 		};
-
 		static_assert(sizeof(Domain) == 2);
 
 		/**
@@ -158,14 +162,46 @@ public:
 				Unsigned,
 				Signed,
 				Float,
+				Char,
 			};
 
-			ID id; ///< Identifier
-			Type type;
-			uint8_t size; ///< In bytes, 0 if variable
-			char name[];  ///< Field name, no NUL
-		};
+			/**
+			 * @brief Application-specific Identifier
+			 *
+			 * For example, modbus register number.
+			 */
+			ID id;
 
+			/**
+			 * @brief Base type of field
+			 */
+			Type type : 7;
+
+			/**
+			 * @brief Variable-length field flag
+			 *
+			 * Allows storage of array-type or variable-length values.
+			 *
+			 * When set, field contains actual length of data in bytes (as uint16_t).
+			 * Data from all variable fields is stored sequentially after fixed portion.
+			 */
+			bool variable : 1;
+
+			/**
+			 * @brief Size of field in bytes
+			 *
+			 * For example, uint8_t stored as Type::Unsigned with size=1.
+			 *
+			 * With variable-length fields, this gives the size of each element in the array.
+			 * For example, 
+			 */
+			uint8_t size;
+
+			/**
+			 * @brief Field name, no NUL
+			 */
+			char name[];
+		};
 		static_assert(sizeof(Field) == 4);
 
 		/**
@@ -179,7 +215,6 @@ public:
 			uint16_t reserved;
 			uint8_t data[]; ///< Data follows in same order and size as fields
 		};
-
 		static_assert(sizeof(Data) == 8);
 	};
 
@@ -213,7 +248,7 @@ public:
 	/**
 	 * @brief Write a Field entry describing one column of data
 	 */
-	bool writeField(uint16_t id, Entry::Field::Type type, uint8_t size, const String& name);
+	bool writeField(uint16_t id, Entry::Field::Type type, uint8_t size, const String& name, bool variable = false);
 
 	template <typename T>
 	typename std::enable_if<!std::is_floating_point<T>::value && std::is_unsigned<T>::value, bool>::type
@@ -235,21 +270,29 @@ public:
 		return writeField(id, Entry::Field::Type::Float, sizeof(T), name);
 	}
 
+	template <typename T>
+	typename std::enable_if<std::is_same<T, char[]>::value, bool>::type writeField(uint16_t id, const String& name)
+	{
+		return writeField(id, Entry::Field::Type::Char, sizeof(char), name, true);
+	}
+
 	/**
 	 * @brief Write a Data entry record
 	 *
 	 * This stores a complete set of data for a given domain.
-	 *
-	 * With large records it may be more efficient to call `writeEntry` directly
-	 * with a prepared `Entry::Data` structure.
 	 */
 	bool writeData(uint16_t domain, const void* data, uint16_t length);
 
 	/**
 	 * @brief Write an Entry of any kind.
 	 */
-	bool writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const void* data = nullptr,
-					uint16_t dataLength = 0);
+	bool writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const void* data, uint16_t dataLength);
+
+	bool writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength)
+	{
+		return writeEntry(kind, info, infoLength, nullptr, 0);
+	}
+
 	bool writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const String& data)
 	{
 		return writeEntry(kind, info, infoLength, data.c_str(), data.length());

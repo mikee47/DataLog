@@ -243,11 +243,12 @@ DataLog::Entry::Domain::ID DataLog::writeDomain(const String& name)
 	return e.id;
 }
 
-bool DataLog::writeField(uint16_t id, Entry::Field::Type type, uint8_t size, const String& name)
+bool DataLog::writeField(uint16_t id, Entry::Field::Type type, uint8_t size, const String& name, bool variable)
 {
 	Entry::Field e{
 		.id = id,
 		.type = type,
+		.variable = variable,
 		.size = size,
 	};
 	return writeEntry(e, name);
@@ -270,6 +271,10 @@ int DataLog::read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSiz
 
 	debug_d("[DL] read: block %u, offset %u, size %u", block, offset, bufSize);
 
+	if(block > endBlock.sequence) {
+		return -1;
+	}
+
 	uint32_t totalSize = totalBlocks * blockSize;
 	uint32_t readOffset = (startBlock.number + block - startBlock.sequence) * blockSize + offset;
 	if(readOffset >= totalSize) {
@@ -279,14 +284,14 @@ int DataLog::read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSiz
 	uint32_t bytesRead{0};
 	if(readOffset > writeOffset) {
 		auto len = std::min(uint32_t(bufSize), totalSize - readOffset);
-		debug_i("[DL] read %u, %u", readOffset, len);
+		debug_i("[DL] read 0x%08x, %u", readOffset, len);
 		partition.read(readOffset, static_cast<uint8_t*>(buffer), len);
 		bytesRead += len;
 		readOffset = 0;
 	}
 	auto len = std::min(bufSize - bytesRead, writeOffset - readOffset);
 	if(len != 0) {
-		debug_i("[DL] read %u, %u", readOffset, len);
+		debug_i("[DL] read 0x%08x, %u", readOffset, len);
 		partition.read(readOffset, static_cast<uint8_t*>(buffer) + bytesRead, len);
 		bytesRead += len;
 	}
