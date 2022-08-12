@@ -52,17 +52,20 @@ String toString(DataLog::Entry::Kind kind)
 
 bool DataLog::init(Storage::Partition partition)
 {
-	isReady = false;
+	if(!partition) {
+		return false;
+	}
+
 	this->partition = partition;
 	blockSize = partition.getBlockSize() * PAGES_PER_BLOCK;
+	if(blockSize == 0) {
+		return false;
+	}
+
 	totalBlocks = partition.size() / blockSize;
 #ifdef MAX_TOTAL_BLOCKS
 	totalBlocks = std::min(totalBlocks, uint16_t(MAX_TOTAL_BLOCKS));
 #endif
-
-	if(!partition || blockSize == 0) {
-		return false;
-	}
 
 	// Read all block sequence numbers
 	uint32_t sequences[totalBlocks]{};
@@ -129,8 +132,6 @@ bool DataLog::init(Storage::Partition partition)
 	debug_i("[DL] endBlock #%u seq %08x", endBlock.number, endBlock.sequence);
 	debug_i("[DL] writeOffset = 0x%08x", writeOffset);
 
-	isReady = true;
-
 	writeEntry(Entry::Kind::map, sequences, totalBlocks * sizeof(sequences[0]));
 
 	Entry::Boot boot{
@@ -138,7 +139,6 @@ bool DataLog::init(Storage::Partition partition)
 	};
 	writeEntry(boot);
 
-	// All blocks read
 	return true;
 }
 
@@ -155,7 +155,7 @@ DataLog::SystemTime DataLog::getSystemTime()
 
 bool DataLog::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, const void* data, uint16_t dataLength)
 {
-	if(!isReady) {
+	if(!isReady()) {
 		return false;
 	}
 

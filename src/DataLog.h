@@ -192,9 +192,14 @@ public:
      */
 	bool init(Storage::Partition partition);
 
+	bool isReady() const
+	{
+		return blockSize != 0;
+	}
+
 	explicit operator bool() const
 	{
-		return isReady;
+		return isReady();
 	}
 
 	bool writeTime();
@@ -290,15 +295,14 @@ private:
 	};
 
 	Storage::Partition partition;
-	BlockInfo startBlock{}; ///< Oldest block in the log (one with lowest sequence number)
-	BlockInfo endBlock{};   ///< Current write block
-	uint32_t writeOffset;   ///< Write offset from start of log
-	uint16_t blockSize;
-	uint16_t totalBlocks; ///< Total number of blocks in partition
-	bool isReady{false};
-	static uint32_t prevTicks; ///< Used by `getSystemTime` to identify wrapping
-	static uint32_t highTicks; ///< Microseconds overflow
-	static uint16_t domainCount;
+	BlockInfo startBlock{};  ///< Oldest block in the log (one with lowest sequence number)
+	BlockInfo endBlock{};	///< Current write block
+	uint32_t writeOffset{0}; ///< Write offset from start of log
+	uint16_t blockSize{0};
+	uint16_t totalBlocks{0};	 ///< Total number of blocks in partition
+	static uint32_t prevTicks;   ///< Used by `getSystemTime` to identify wrapping
+	static uint32_t highTicks;   ///< Microseconds overflow
+	static uint16_t domainCount; ///< Used to assign domain IDs
 };
 
 String toString(DataLog::Entry::Kind kind);
