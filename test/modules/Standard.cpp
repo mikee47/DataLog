@@ -19,7 +19,7 @@ public:
 	{
 		log.writeTime();
 
-		int domain = log.writeDomain("Test");
+		int table = log.writeTable("Test");
 		log.writeField<char[]>(0, "Startup");
 		log.writeField<float>(1, "float1");
 		log.writeField<double>(2, "double2");
@@ -44,7 +44,7 @@ public:
 		size_t off = 0;
 		off += testString.read(0, &data.extra[off], data.var0);
 		off += var3.read(0, &data.extra[off], data.var3);
-		log.writeData(domain, &data, offsetof(Data, extra) + off);
+		log.writeData(table, &data, offsetof(Data, extra) + off);
 	}
 
 private:

@@ -1,3 +1,22 @@
+/**
+ * DataLog.cpp
+ *
+ * Copyright 2022 mikee47 <mike@sillyhouse.net>
+ *
+ * This file is part of the DataLog Library
+ *
+ * This library is free software: you can redistribute it and/or modify it under the terms of the
+ * GNU General Public License as published by the Free Software Foundation, version 3 or later.
+ *
+ * This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+ * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with this library.
+ * If not, see <https://www.gnu.org/licenses/>.
+ *
+ ****/
+
 #undef DEBUG_VERBOSE_LEVEL
 
 #include "DataLog.h"
@@ -43,7 +62,7 @@ struct BlockStart {
 
 uint32_t DataLog::prevTicks;
 uint32_t DataLog::highTicks;
-uint16_t DataLog::domainCount;
+uint16_t DataLog::tableCount;
 
 String toString(DataLog::Entry::Kind kind)
 {
@@ -233,14 +252,20 @@ bool DataLog::writeTime()
 	return writeEntry(e);
 }
 
-DataLog::Entry::Domain::ID DataLog::writeDomain(const String& name)
+DataLog::Entry::Table::ID DataLog::writeTable(const String& name)
 {
-	++domainCount;
-	Entry::Domain e{
-		.id = domainCount,
+	++tableCount;
+	auto tableId = tableCount;
+	writeTable(tableId, name);
+	return tableId;
+}
+
+bool DataLog::writeTable(DataLog::Entry::Table::ID tableId, const String& name)
+{
+	Entry::Table e{
+		.id = tableId,
 	};
-	writeEntry(e, name);
-	return e.id;
+	return writeEntry(e, name);
 }
 
 bool DataLog::writeField(uint16_t id, Entry::Field::Type type, uint8_t size, const String& name, bool variable)
@@ -254,11 +279,11 @@ bool DataLog::writeField(uint16_t id, Entry::Field::Type type, uint8_t size, con
 	return writeEntry(e, name);
 }
 
-bool DataLog::writeData(uint16_t domain, const void* data, uint16_t length)
+bool DataLog::writeData(uint16_t table, const void* data, uint16_t length)
 {
 	Entry::Data e{
 		.systemTime = getSystemTime(),
-		.domain = domain,
+		.table = table,
 	};
 	return writeEntry(e, data, length);
 }

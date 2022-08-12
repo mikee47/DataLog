@@ -1,3 +1,22 @@
+/**
+ * DataLog.h
+ *
+ * Copyright 2022 mikee47 <mike@sillyhouse.net>
+ *
+ * This file is part of the DataLog Library
+ *
+ * This library is free software: you can redistribute it and/or modify it under the terms of the
+ * GNU General Public License as published by the Free Software Foundation, version 3 or later.
+ *
+ * This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+ * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with this library.
+ * If not, see <https://www.gnu.org/licenses/>.
+ *
+ ****/
+
 #pragma once
 
 #include <Storage.h>
@@ -6,22 +25,25 @@
 /**
  * @brief Circular flash data logging
  *
+ * 
+ * 
  * Elements written out are kept small. Order as follows:
  *
- * - First entry in a block is 'start'
- * - 'domain' identifies a data source, should appear before any data16 records
- * - 'field' records are optional and identify fields in the domain's dataset
- * - 'data16' records contain actual data
+ * - 'table' identifies a data source
+ * - 'field' entries identify table fields (columns) and their types
+ * - 'data' records contain actual data
  *
- * The 'start', 'domain' and 'field' records can be relatively large.
- * A 512K partition contains 128 flash pages, so perhaps 8 flash  pages per block
- * would be appropriate.
+ * The 'table' and 'field' records must appear together and in that order.
+ * The application should write these on every system restart.
+ * This accommodates updates to amend table structures if required.
+ * Major changes would probably require a new table name, perhaps with version number.
  *
- * For long-term data storage the log must be replicated to a server.
- * Perhaps the simplest way to do that is to include a callback which is invoked
- * after a full block has been written.
- * In the event of network issues, etc. the log can be read in full and block sequence
- * numbers used to resume replication. See DataLogReader.
+ * Entries are not permitted to straddle blocks. If an entry won't fit in the available
+ * space then it's marked as 'padding' and a new block is started.
+ *
+ * Block size is fixed at 16K (4 flash pages) to reduce the impact of this padding.
+ *
+ * For long-term data storage the log must be replicated to a server. See `DataLogReader`.
  *
  * Endurance
  * ---------
@@ -49,7 +71,7 @@ public:
 	XX(block, 1, "Identifies start of block")                                                                          \
 	XX(boot, 2, "System boot")                                                                                         \
 	XX(time, 3, "Contains RTC value and corresponding system time")                                                    \
-	XX(domain, 4, "Qualifies following fields (e.g. name of device)")                                                  \
+	XX(table, 4, "Qualifies following fields (e.g. name of device)")                                                   \
 	XX(field, 5, "Field identification record")                                                                        \
 	XX(data, 6, "Data record")                                                                                         \
 	XX(exception, 7, "Exception information")                                                                          \
@@ -141,15 +163,15 @@ public:
 		};
 
 		/**
-         * @brief A domain identifies a data set
+         * @brief A table identifies a data set
          */
-		struct Domain {
-			static constexpr Kind kind{Kind::domain};
+		struct Table {
+			static constexpr Kind kind{Kind::table};
 			using ID = uint16_t;
 			ID id;		 ///< Identifier
 			char name[]; ///< e.g. name of device, no NUL
 		};
-		static_assert(sizeof(Domain) == 2);
+		static_assert(sizeof(Table) == 2);
 
 		/**
          * @brief A field descriptor
@@ -211,7 +233,7 @@ public:
 			static constexpr Kind kind{Kind::data};
 
 			SystemTime systemTime;
-			Domain::ID domain; ///< Identifies which domain this data is for
+			Table::ID table; ///< Identifies which table this data is for
 			uint16_t reserved;
 			uint8_t data[]; ///< Data follows in same order and size as fields
 		};
@@ -238,12 +260,22 @@ public:
 	}
 
 	bool writeTime();
+
 	/**
-	 * @brief Write a domain record and return the allocated ID
+	 * @brief Write a table record and return the allocated ID
 	 *
-	 * Use the domain ID in subsequent `writeField` calls.
+	 * Use the table ID in subsequent `writeField` calls.
 	 */
-	Entry::Domain::ID writeDomain(const String& name);
+	Entry::Table::ID writeTable(const String& name);
+
+	/**
+	 * @brief Write a table record using a pre-allocated ID
+	 * @param tableId Must have been obtained from a previous call to writeTable(const String&)
+	 *
+	 * This method is used by the application to periodically refresh the table and field
+	 * information.
+	 */
+	bool writeTable(Entry::Table::ID tableId, const String& name);
 
 	/**
 	 * @brief Write a Field entry describing one column of data
@@ -279,9 +311,9 @@ public:
 	/**
 	 * @brief Write a Data entry record
 	 *
-	 * This stores a complete set of data for a given domain.
+	 * This stores a complete set of data for a given table.
 	 */
-	bool writeData(uint16_t domain, const void* data, uint16_t length);
+	bool writeData(uint16_t table, const void* data, uint16_t length);
 
 	/**
 	 * @brief Write an Entry of any kind.
@@ -342,10 +374,10 @@ private:
 	BlockInfo endBlock{};	///< Current write block
 	uint32_t writeOffset{0}; ///< Write offset from start of log
 	uint16_t blockSize{0};
-	uint16_t totalBlocks{0};	 ///< Total number of blocks in partition
-	static uint32_t prevTicks;   ///< Used by `getSystemTime` to identify wrapping
-	static uint32_t highTicks;   ///< Microseconds overflow
-	static uint16_t domainCount; ///< Used to assign domain IDs
+	uint16_t totalBlocks{0};	///< Total number of blocks in partition
+	static uint32_t prevTicks;  ///< Used by `getSystemTime` to identify wrapping
+	static uint32_t highTicks;  ///< Microseconds overflow
+	static uint16_t tableCount; ///< Used to assign table IDs
 };
 
 String toString(DataLog::Entry::Kind kind);
