@@ -27,6 +27,7 @@ FILE_DATALOG = "logs/datalog-%08x-%08x.bin"
 FILE_NEXTSEQ = "logs/next.seq"
 FILE_TAIL = "logs/tail.bin"
 
+
 def printProperties(obj):
     print(f"Properties for {type(obj)}:")
     for prop, val in vars(obj).items():
@@ -77,12 +78,11 @@ class Entry:
         content = block.content[offset+4:offset+4+entrySize]
         if flags == 0xfe:
             if kind in map:
-                # print(f"{str(Kind(kind))}, {entrySize}, {flags:#x}")
                 try:
                     entry = map[kind](content, ctx)
                 except (UnicodeDecodeError, IndexError, struct.error, ValueError) as err:
                     entry = None
-                    print(f"seq {block.sequence:#x} @{offset:#010x} {str(Kind(kind))}, size {entrySize}, flags {flags}, {type(err).__name__}: {err}")
+                    print(f"seq {block.sequence:#x} @{offset:#010x} {Kind(kind).name}, size {entrySize}, flags {flags}, {type(err).__name__}: {err}")
             if entry is None:
                 entry = UnknownEntry(kind, content, ctx)
         elif flags != 0xff:
@@ -98,7 +98,7 @@ class Entry:
         return True
 
     def fixup(self, ctx):
-        pass
+        return True
 
 
 class UnknownEntry(Entry):
@@ -121,16 +121,19 @@ class Boot(Entry):
         ExtSysReset = 6,
 
     def __init__(self, content, ctx):
-        self.utc = None
+        self.time = None
         self.kind = Kind.boot
-        self.reason = content[0]
+        self.reason = Boot.Reason(content[0])
         ctx.reset()
 
     def __str__(self):
-        return "reason %s, %s" % (Boot.Reason(self.reason), timestr(self.utc))
+        return f"reason {self.reason.name}"
 
     def fixup(self, ctx):
-        self.utc = ctx.time.getUtc(0)
+        if self.time is None:
+            self.time = ctx.time.getUtc(0)
+            return True
+        return False
 
 class Time(Entry):
     def __init__(self, content, ctx):
@@ -187,7 +190,7 @@ class Field(Entry):
         (self.id, type, self.size) = struct.unpack("<HBB", content[:4])
         if self.size == 0:
             raise ValueError('Bad field')
-        self.type = type & 0x7f
+        self.type = Field.Type(type & 0x7f)
         self.isVariable = (type & 0x80) != 0
         self.name = content[4:].decode()
         if self.table is not None:
@@ -197,7 +200,7 @@ class Field(Entry):
 
     def typestr(self):
         t = Field.typemap.get((self.type, self.size))
-        return t[0] if t else f"{str(Field.Type(self.type))}{self.size*8}"
+        return t[0] if t else f"{self.type.name}{self.size*8}"
 
     def sqltype(self):
         t = Field.typemap.get((self.type, self.size))
@@ -262,11 +265,14 @@ class Data(Entry):
     def fixup(self, ctx):
         if self.time is None:
             self.time = ctx.time
+            return True
+        return False
 
 
 class Exception(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.exception
+        self.time = None
         (self.cause, self.epc1, self.epc2, self.epc3, self.excvaddr, self.depc) = struct.unpack("<6I", content[:24])
         self.stack = array.array("I", content[24:])
 
@@ -276,6 +282,10 @@ class Exception(Entry):
             s += "\r\n"
             s += ", ".join(f"{e:#010x}" for e in self.stack)
         return s
+
+    def fixup(self, ctx):
+        if self.time is None:
+            self.time = ctx.time.getUtc(0)
 
 
 class Map(Entry):
@@ -405,8 +415,7 @@ class DataLog:
                 self.time = entry
                 # Iterate previous DATA records as timeref now known
                 for e in reversed(self.entries):
-                    e.fixup(self)
-                    if e.kind == Kind.boot:
+                    if not e.fixup(self) and e.kind == Kind.data:
                         break
 
             self.entries.append(entry)
@@ -583,7 +592,7 @@ def main():
                 print(f"Kind.data x {dataCount}")
 
         for entry in log.entries:
-            print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {str(entry.kind)}: {entry}")
+            print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {entry.kind.name}: {entry}")
             if verbose and entry.kind == Kind.data and entry.table is not None:
                 for f in entry.table.fields:
                     print(f"  {f.id:#5} {f.name} = {f.getValue(entry.data)}")
@@ -591,19 +600,32 @@ def main():
         printData()
 
 
+    SYSTABLE_PREFIX = '__'
+    SYSTABLE_NAME = SYSTABLE_PREFIX + 'datalog'
+
     if args.export:
         tables = {}
+        sysTables = []
         con = sqlite3.connect('datalog.db')
         cur = con.execute("SELECT name FROM sqlite_master WHERE type='table';")
         for r in cur:
             tableName = r[0]
-            r = con.execute(f"SELECT max(utc) FROM [{tableName}]").fetchone()
-            tableInfo = dict(utc=r[0])
-            tables[tableName] = tableInfo
+            if tableName.startswith(SYSTABLE_PREFIX):
+                sysTables.append(tableName)
+            else:
+                r = con.execute(f"SELECT max(utc) FROM [{tableName}]").fetchone()   
+                tableInfo = dict(utc=r[0])
+                tables[tableName] = tableInfo
+
+        if SYSTABLE_NAME not in sysTables:
+            con.execute(f"CREATE TABLE [{SYSTABLE_NAME}](utc DATETIME, kind TEXT, comment TEXT)")
 
         exportCount = 0
         skipCount = 0
         for entry in log.entries:
+            if entry.kind == Kind.boot or entry.kind == Kind.exception:
+                con.execute(f"INSERT INTO [{SYSTABLE_NAME}](utc, kind, comment) VALUES({entry.time}, ?, ?);", (entry.kind.name, str(entry)))
+                continue
             if entry.kind != Kind.data or entry.table is None:
                 continue
 
