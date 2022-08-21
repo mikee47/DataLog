@@ -576,15 +576,12 @@ def main():
             print("tail %u, next %x" % (tail, nextSequence))
             
 
-    if args.dump or args.export:
+    if args.dump:
         log = DataLog()
-        log.loadContext('context.bin')
         for b in sorted(blocks):
             log.loadBlock(blocks[b])
-        print(f"{len(log.entries)} new entries loaded")
-        log.saveContext('context.bin')
+        print(f"{len(log.entries)} entries loaded")
 
-    if args.dump:
         dataCount = 0
 
         def printData():
@@ -604,6 +601,12 @@ def main():
     SYSTABLE_NAME = SYSTABLE_PREFIX + 'datalog'
 
     if args.export:
+        log = DataLog()
+        log.loadContext('context.bin')
+        for b in sorted(blocks):
+            log.loadBlock(blocks[b])
+        print(f"{len(log.entries)} new entries loaded")
+
         tables = {}
         sysTables = []
         con = sqlite3.connect('datalog.db')
@@ -613,8 +616,9 @@ def main():
             if tableName.startswith(SYSTABLE_PREFIX):
                 sysTables.append(tableName)
             else:
-                r = con.execute(f"SELECT max(utc) FROM [{tableName}]").fetchone()   
-                tableInfo = dict(utc=r[0])
+                r = con.execute(f"SELECT max(utc) FROM [{tableName}];").fetchone()
+                columns = [c[1] for c in con.execute(f"PRAGMA table_info('{tableName}');")]
+                tableInfo = dict(utc=r[0], entry=None, columns=columns)
                 tables[tableName] = tableInfo
 
         if SYSTABLE_NAME not in sysTables:
@@ -624,7 +628,8 @@ def main():
         skipCount = 0
         for entry in log.entries:
             if entry.kind == Kind.boot or entry.kind == Kind.exception:
-                con.execute(f"INSERT INTO [{SYSTABLE_NAME}](utc, kind, comment) VALUES({entry.time}, ?, ?);", (entry.kind.name, str(entry)))
+                if entry.time is not None:
+                    con.execute(f"INSERT INTO [{SYSTABLE_NAME}](utc, kind, comment) VALUES({entry.time}, ?, ?);", (entry.kind.name, str(entry)))
                 continue
             if entry.kind != Kind.data or entry.table is None:
                 continue
@@ -633,13 +638,25 @@ def main():
             fields = entry.table.fields
             tableInfo = tables.get(tableName)
             if tableInfo is None:
-                columnDefs = ", ".join(f"[{f.name}] {f.sqltype()}" for f in fields)
-                stmt = f"CREATE TABLE [{tableName}](utc DATETIME PRIMARY KEY NOT NULL, {columnDefs});"
+                # Create database table
+                columnDefs = ",\n".join(f"  [{f.name}] {f.sqltype()}" for f in fields)
+                stmt = f"CREATE TABLE [{tableName}] (\n  utc DATETIME PRIMARY KEY NOT NULL,\n{columnDefs});"
                 print(stmt)
                 con.execute(stmt)
-                tableInfo = dict(utc=0)
+                tableInfo = dict(utc=0, entry=entry.table, columns=[f.name for f in fields])
                 tables[tableName] = tableInfo
                 con.commit()
+            elif entry.table != tableInfo['entry']:
+                # Check for new fields and amend database table definition
+                columns = tableInfo['columns']
+                for f in fields:
+                    if f.name in columns:
+                        continue
+                    stmt = f"ALTER TABLE [{tableName}] ADD COLUMN [{f.name}] {f.sqltype()};"
+                    print(stmt)
+                    con.execute(stmt)
+                    columns.append(f.name)
+                tableInfo['entry'] = entry.table
 
             utc =  entry.getUtc()
             if utc <= tables[tableName]['utc']:
@@ -662,6 +679,7 @@ def main():
                 pass
 
         con.commit()
+        log.saveContext('context.bin')
 
         print(f"{exportCount} entries exported")
         print(f"{skipCount} existing entries skipped")
