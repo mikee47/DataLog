@@ -138,11 +138,21 @@ class Boot(Entry):
 class Time(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.time
-        (self.systemTime, self.utc) = struct.unpack("<II", content)
-        self.systemTime = ctx.checkTime(self.systemTime)
+        if isinstance(content, dict):
+            self.systemTime = content['systemTime']
+            self.utc = content['utc']
+        else:
+            (self.systemTime, self.utc) = struct.unpack("<II", content)
+            self.systemTime = ctx.checkTime(self.systemTime)
 
     def __str__(self):
         return "systemTime %u, %s" % (self.systemTime, timestr(self.utc))
+
+    def dict(self):
+        return dict(
+            systemTime=self.systemTime,
+            utc=self.utc,
+        )
 
     def getUtc(self, systemTime):
         return self.utc + (systemTime - self.systemTime) / 1000
@@ -151,16 +161,28 @@ class Time(Entry):
 class Table(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.table
-        (self.id,) = struct.unpack("<H", content[:2])
-        self.name = content[2:].decode()
         self.fields = []
-        self.dataEntryCount = 0
         self.fieldDataSize = 0
-        ctx.tables[self.id] = self
         ctx.table = self
+        if isinstance(content, dict):
+            self.id = content['id']
+            self.name = content['name']
+            for f in content['fields']:
+                Field(f, ctx)
+        else:
+            (self.id,) = struct.unpack("<H", content[:2])
+            self.name = content[2:].decode()
+        ctx.tables[self.id] = self
 
     def __str__(self):
         return "id %u, name '%s'" % (self.id, self.name)
+
+    def dict(self):
+        return dict(
+            id=self.id,
+            name=self.name,
+            fields=[field.dict() for field in self.fields],
+        )
 
 
 class Field(Entry):
@@ -187,12 +209,19 @@ class Field(Entry):
     def __init__(self, content, ctx):
         self.kind = Kind.field
         self.table = ctx.table
-        (self.id, type, self.size) = struct.unpack("<HBB", content[:4])
-        if self.size == 0:
-            raise ValueError('Bad field')
-        self.type = Field.Type(type & 0x7f)
-        self.isVariable = (type & 0x80) != 0
-        self.name = content[4:].decode()
+        if isinstance(content, dict):
+            self.id = content['id']
+            self.name = content['name']
+            self.type = Field.Type[content['type']]
+            self.size = content['size']
+            self.isVariable = content['isVariable']
+        else:
+            (self.id, type, self.size) = struct.unpack("<HBB", content[:4])
+            if self.size == 0:
+                raise ValueError('Bad field')
+            self.type = Field.Type(type & 0x7f)
+            self.isVariable = (type & 0x80) != 0
+            self.name = content[4:].decode()
         if self.table is not None:
             self.offset = self.table.fieldDataSize
             self.table.fieldDataSize += 2 if self.isVariable else self.size
@@ -213,29 +242,44 @@ class Field(Entry):
             print(f"Bad field type! type {self.type}, size {self.size}, name {self.name}, table {self.table}")
             return 0
         if not self.isVariable:
-            (value,) = struct.unpack(f"<{fmt}", data[self.offset:self.offset+self.size])
+            try:
+                (value,) = struct.unpack(f"<{fmt}", data[self.offset:self.offset+self.size])
+            except:
+                print("fmt:", fmt)
+                print("offset", self.offset, ", size", self.size, ", len", len(data))
+                print(self)
+                return 0
             return value
-        len = 0
+        fieldLength = 0
         off = self.table.fieldDataSize
         value = None
         for f in self.table.fields:
             if not f.isVariable:
                 continue
-            (len,) = struct.unpack("<H", data[f.offset:f.offset+2])
-            len *= f.size
+            (fieldLength,) = struct.unpack("<H", data[f.offset:f.offset+2])
+            fieldLength *= f.size
             if f is self:
                 if fmt == 's':
-                    value = data[off:off+len].decode()
+                    value = data[off:off+fieldLength].decode()
                 else:
-                    value = array.array(fmt, data[off:off+len])
+                    value = array.array(fmt, data[off:off+fieldLength])
                 break
-            off += len
+            off += fieldLength
         return value
 
     def __str__(self):
         s = "?" if self.table is None else self.table.name
         s += f", id {self.id}, {self.typestr()}, name '{self.name}'"
         return s
+
+    def dict(self):
+        return dict(
+            id=self.id,
+            name=self.name,
+            type=self.type.name,
+            size=self.size,
+            isVariable=self.isVariable,
+        )
 
 
 class Data(Entry):
@@ -324,6 +368,11 @@ class Block:
     def __str__(self):
         return f"{self.sequence:#010x} {Kind(self.kind)}, {self.flags:#02x}, {self.magic:#08x}"
 
+    def dict(self):
+        return dict(
+
+        )
+
     def isFull(self):
         return 4 + self.size + len(self.content) == Block.SIZE
 
@@ -372,7 +421,8 @@ class BlockList(dict):
 
 class DataLog:
     def __init__(self):
-        self.lastBlock = None
+        self.lastBlockSequence = 0
+        self.lastBlockLength = 0
         self.entries = []
         self.reset()
 
@@ -392,12 +442,11 @@ class DataLog:
 
     def loadBlock(self, block):
         off = 0
-        if self.lastBlock is not None:
-            if block.sequence < self.lastBlock.sequence:
-                return
-            if block.sequence == self.lastBlock.sequence:
-                off = len(self.lastBlock.content)
-        self.lastBlock = block
+        if block.sequence < self.lastBlockSequence:
+            return
+        if block.sequence == self.lastBlockSequence:
+            off = self.lastBlockLength
+        self.lastBlockSequence, self.lastBlockLength = block.sequence, len(block.content)
 
         while off < len(block.content):
             # print(f"offset {12+off:#x}: {' '.join(hex(x) for x in block.content[off:off+8])}")
@@ -421,25 +470,34 @@ class DataLog:
             self.entries.append(entry)
 
     def saveContext(self, filename):
-         with open(filename, "wb") as f:
-            pickle.dump(self.time, f)
-            pickle.dump(self.prevSystemTime, f)
-            pickle.dump(self.highTime, f)
-            pickle.dump(self.lastBlock, f)
-            pickle.dump(self.tables, f)
+        context = dict(
+            time=self.time.dict(),
+            prevSystemTime=self.prevSystemTime,
+            highTime=self.highTime,
+            lastBlockSequence=self.lastBlockSequence,
+            lastBlockLength=self.lastBlockLength,
+            tables=[table.dict() for table in self.tables.values()],
+        )
+        with open(filename, "w") as f:
+            json.dump(context, f, indent=2)
 
     def loadContext(self, filename):
         try:
-            with open(filename, "rb") as f:
-                self.time = pickle.load(f)
-                self.prevSystemTime = pickle.load(f)
-                self.highTime = pickle.load(f)
-                self.lastBlock = pickle.load(f)
-                self.tables = pickle.load(f)
+            with open(filename, "r") as f:
+                context = json.load(f)
+            self.time = Time(context['time'], self)
+            self.prevSystemTime = context['prevSystemTime']
+            self.highTime = context['highTime']
+            self.lastBlockSequence = context['lastBlockSequence']
+            self.lastBlockLength = context['lastBlockLength']
+            self.tables = {}
+            for t in context['tables']:
+                Table(t, self)
             if verbose:
-                print(f"lastBlock = {self.lastBlock.sequence:#x}, {len(self.lastBlock.content)}")
+                print(f"lastBlock = {self.lastBlockSequence:#x}, {self.lastBlockLength}")
         except FileNotFoundError:
             pass
+
 
 def main():
     parser = argparse.ArgumentParser(description='DataLog tool')
@@ -602,7 +660,7 @@ def main():
 
     if args.export:
         log = DataLog()
-        log.loadContext('context.bin')
+        log.loadContext('context.json')
         for b in sorted(blocks):
             log.loadBlock(blocks[b])
         print(f"{len(log.entries)} new entries loaded")
@@ -679,7 +737,7 @@ def main():
                 pass
 
         con.commit()
-        log.saveContext('context.bin')
+        log.saveContext('context.json')
 
         print(f"{exportCount} entries exported")
         print(f"{skipCount} existing entries skipped")
