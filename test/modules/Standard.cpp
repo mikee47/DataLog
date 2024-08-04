@@ -18,27 +18,37 @@ public:
 
 	void execute() override
 	{
-		const int rounds = 64;
+		const int rounds = 256;
+
 		Profiling::MicroTimes times(F("Log Entry"));
+
+		/*
+		 * Create table header.
+		 * Applications should only need to do this *once* for each table at startup.
+		 */
+		times.start();
+		DataLog::Table table(log);
+		table.writeTable("Test");
+		table.writeField<char[]>(0, "Startup");
+		table.writeField<float>(1, "float1");
+		table.writeField<double>(2, "double2");
+		table.writeField<char[]>(3, "MoreInfo");
+		times.update();
+
+		/*
+		 * Now write some entries 
+		 */
 		for(int i = 0; i < rounds; ++i) {
 			times.start();
-			logEntry();
+			logEntry(table);
 			times.update();
 		}
 		Serial << times << endl;
 	}
 
-	void __noinline logEntry()
+	void __noinline logEntry(DataLog::Table& table)
 	{
 		log.writeTime();
-
-		DataLog::Table table(log);
-		table.writeTable("Test");
-
-		table.writeField<char[]>(0, "Startup");
-		table.writeField<float>(1, "float1");
-		table.writeField<double>(2, "double2");
-		table.writeField<char[]>(3, "MoreInfo");
 
 		struct __attribute__((packed)) Data {
 			DataLog::Size var0;
