@@ -3,6 +3,9 @@ DataLog Test
 
 Application to perform integration tests for DataLog library.
 
+Host
+----
+
 Running on Host::
 
     make flash run
@@ -13,11 +16,22 @@ To inspect::
 
 NB. 0xba000 is start of **datalog1** partition as reported via **make map**.
 
-To pull the log out of flash backing store into a separate file::
 
-    dd bs=4096 skip=$((0xba)) count=64 if=out/Host/debug/firmware/flash.bin of=log.bin
+All architectures
+-----------------
+
+*except rp2040* - flash reading requires debug connection.
+
+To pull the log out of flash into a separate file::
+
+    make readpart PART=datalog1
 
 To dump the contents of the log::
 
-    python ../tools/datalog.py log.bin --dump
+    python ../tools/datalog.py --dump out/Host/debug/datalog1.read.bin
 
+substitute **Host** for **Esp8266**, etc.
+
+To export data into sqlite3 database **datalog.db**:
+
+    python ../tools/datalog.py --export out/Host/debug/datalog1.read.bin
