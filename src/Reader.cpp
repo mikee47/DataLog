@@ -46,7 +46,7 @@ uint16_t Reader::readMemoryBlock(char* data, int bufSize)
 
 int Reader::seekFrom(int offset, SeekOrigin origin)
 {
-	debug_d("[DLR] SEEK offset %u, origin %u (readPos %u, size %u)", offset, origin, readPos, size);
+	debug_d("[DLR] SEEK offset %u, origin %u, readPos %u", offset, origin, readPos);
 
 	if(origin != SeekOrigin::Current) {
 		return -1;
