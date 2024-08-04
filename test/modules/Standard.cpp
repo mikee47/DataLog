@@ -4,6 +4,7 @@
 
 #include <SmingTest.h>
 #include <DataLog.h>
+#include <Services/Profiling/MinMaxTimes.h>
 
 class StandardTest : public TestGroup
 {
@@ -16,6 +17,18 @@ public:
 	}
 
 	void execute() override
+	{
+		const int rounds = 64;
+		Profiling::MicroTimes times(F("Log Entry"));
+		for(int i = 0; i < rounds; ++i) {
+			times.start();
+			logEntry();
+			times.update();
+		}
+		Serial << times << endl;
+	}
+
+	void __noinline logEntry()
 	{
 		log.writeTime();
 
