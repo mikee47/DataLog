@@ -72,7 +72,7 @@ bool Log::init(Storage::Partition partition)
 	for(unsigned block = 0; block < totalBlocks; ++block) {
 		BlockStart s{};
 		partition.read(block * blockSize, &s, sizeof(s));
-		debug_i("[DL] 0x%08x blk #%u seq %08x", block * blockSize, block, s.block.sequence);
+		debug_d("[DL] 0x%08x blk #%u seq %08x", block * blockSize, block, s.block.sequence);
 		if(s.isValid()) {
 			sequences[block] = s.block.sequence;
 		}
@@ -128,9 +128,9 @@ bool Log::init(Storage::Partition partition)
 		}
 	}
 
-	debug_i("[DL] startBlock #%u seq %08x", startBlock.number, startBlock.sequence);
-	debug_i("[DL] endBlock #%u seq %08x", endBlock.number, endBlock.sequence);
-	debug_i("[DL] writeOffset = 0x%08x", writeOffset);
+	debug_d("[DL] startBlock #%u seq %08x", startBlock.number, startBlock.sequence);
+	debug_d("[DL] endBlock #%u seq %08x", endBlock.number, endBlock.sequence);
+	debug_d("[DL] writeOffset = 0x%08x", writeOffset);
 
 	state = State::ready;
 	return true;
@@ -176,7 +176,7 @@ bool Log::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, co
 			.kind = Entry::Kind::pad,
 			.flags = 0,
 		};
-		debug_i("[DL] Pad %u @ 0x%08x", header.size, writeOffset);
+		debug_d("[DL] Pad %u @ 0x%08x", header.size, writeOffset);
 		partition.write(writeOffset, &header, sizeof(header));
 		writeOffset += space;
 	}
@@ -187,14 +187,14 @@ bool Log::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, co
 		++endBlock.sequence;
 		if(endBlock.number == startBlock.number && startBlock.sequence != 0) {
 			// Retire this block
-			debug_i("[DL] Retire block #%u seq %08x", startBlock.number, startBlock.sequence);
+			debug_d("[DL] Retire block #%u seq %08x", startBlock.number, startBlock.sequence);
 			++startBlock.number;
 			startBlock.number %= totalBlocks;
 			++startBlock.sequence;
 		}
 
 		// Initialise the block
-		debug_i("[DL] Initialise block #%u seq %08x @ 0x%08x", endBlock.number, endBlock.sequence, writeOffset);
+		debug_d("[DL] Initialise block #%u seq %08x @ 0x%08x", endBlock.number, endBlock.sequence, writeOffset);
 		partition.erase_range(writeOffset, blockSize);
 		BlockStart s{
 			.header =
@@ -218,7 +218,7 @@ bool Log::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, co
 		.kind = kind,
 		.flags = 0xff,
 	};
-	debug_i("[DL] > %s %u @ 0x%08x", toString(header.kind).c_str(), header.size, writeOffset);
+	debug_d("[DL] > %s %u @ 0x%08x", toString(header.kind).c_str(), header.size, writeOffset);
 	partition.write(writeOffset, &header, sizeof(header));
 	partition.write(writeOffset + sizeof(header), info, infoLength);
 	partition.write(writeOffset + sizeof(header) + infoLength, data, dataLength);
@@ -262,14 +262,14 @@ int Log::read(uint16_t block, uint16_t offset, void* buffer, uint16_t bufSize)
 	uint32_t bytesRead{0};
 	if(readOffset > writeOffset) {
 		auto len = std::min(uint32_t(bufSize), totalSize - readOffset);
-		debug_i("[DL] read 0x%08x, %u", readOffset, len);
+		debug_d("[DL] read 0x%08x, %u", readOffset, len);
 		partition.read(readOffset, static_cast<uint8_t*>(buffer), len);
 		bytesRead += len;
 		readOffset = 0;
 	}
 	auto len = std::min(bufSize - bytesRead, writeOffset - readOffset);
 	if(len != 0) {
-		debug_i("[DL] read 0x%08x, %u", readOffset, len);
+		debug_d("[DL] read 0x%08x, %u", readOffset, len);
 		partition.read(readOffset, static_cast<uint8_t*>(buffer) + bytesRead, len);
 		bytesRead += len;
 	}
