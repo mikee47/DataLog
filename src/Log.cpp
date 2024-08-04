@@ -221,7 +221,9 @@ bool Log::writeEntry(Entry::Kind kind, const void* info, uint16_t infoLength, co
 	debug_d("[DL] > %s %u @ 0x%08x", toString(header.kind).c_str(), header.size, writeOffset);
 	partition.write(writeOffset, &header, sizeof(header));
 	partition.write(writeOffset + sizeof(header), info, infoLength);
-	partition.write(writeOffset + sizeof(header) + infoLength, data, dataLength);
+	if(dataLength != 0) {
+		partition.write(writeOffset + sizeof(header) + infoLength, data, dataLength);
+	}
 	header.flags[Entry::Flag::invalid] = false;
 	partition.write(writeOffset, &header, sizeof(header));
 
