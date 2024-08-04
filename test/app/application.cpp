@@ -38,13 +38,6 @@ void init()
 
 	debug_e("WELCOME to SMING! Host Tests application running.");
 
-	spiffs_mount();
-
-#ifndef DISABLE_WIFI
-	WifiStation.enable(false, false);
-	WifiAccessPoint.enable(false, false);
-#endif
-
 	registerTests();
 
 	SmingTest::runner.setGroupIntervalMs(TEST_GROUP_INTERVAL);

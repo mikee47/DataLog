@@ -19,11 +19,13 @@ public:
 	{
 		log.writeTime();
 
-		int table = log.writeTable("Test");
-		log.writeField<char[]>(0, "Startup");
-		log.writeField<float>(1, "float1");
-		log.writeField<double>(2, "double2");
-		log.writeField<char[]>(3, "MoreInfo");
+		DataLog::Table table(log);
+		table.writeTable("Test");
+
+		table.writeField<char[]>(0, "Startup");
+		table.writeField<float>(1, "float1");
+		table.writeField<double>(2, "double2");
+		table.writeField<char[]>(3, "MoreInfo");
 
 		struct __attribute__((packed)) Data {
 			DataLog::Size var0;
@@ -44,11 +46,11 @@ public:
 		size_t off = 0;
 		off += testString.read(0, &data.extra[off], data.var0);
 		off += var3.read(0, &data.extra[off], data.var3);
-		log.writeData(table, &data, offsetof(Data, extra) + off);
+		table.writeData(&data, offsetof(Data, extra) + off);
 	}
 
 private:
-	DataLog log;
+	DataLog::Log log;
 };
 
 void REGISTER_TEST(Standard)
