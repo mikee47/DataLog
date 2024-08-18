@@ -1,14 +1,13 @@
 {
     "name": "New Profile",
     "base_config": "standard",
-    "options": [],
+    "options": [
+        "2m"
+    ],
     "partitions": {
-        "rom0": {
-            "size": "712K"
-        },
         "datalog1": {
             "device": "spiFlash",
-            "address": "0x000ba000",
+            "address": "0x00100000",
             "size": "256K",
             "type": "user",
             "subtype": 1,
