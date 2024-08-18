@@ -68,7 +68,8 @@ bool Log::init(Storage::Partition partition)
 #endif
 
 	// Read all block sequence numbers
-	uint32_t sequences[totalBlocks]{};
+	uint32_t sequences[totalBlocks];
+	std::fill_n(sequences, totalBlocks, 0);
 	for(unsigned block = 0; block < totalBlocks; ++block) {
 		BlockStart s{};
 		partition.read(block * blockSize, &s, sizeof(s));
