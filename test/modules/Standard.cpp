@@ -9,7 +9,8 @@
 class StandardTest : public TestGroup
 {
 public:
-	StandardTest() : TestGroup(_F("Standard"))
+	StandardTest() : TestGroup(_F("Standard")), table(log), times(F("Log Entry"))
+
 	{
 		auto part = Storage::findPartition(F("datalog1"));
 		REQUIRE(part);
@@ -20,36 +21,42 @@ public:
 	{
 		const int rounds = 256;
 
-		Profiling::MicroTimes times(F("Log Entry"));
-
 		/*
 		 * Create table header.
 		 * Applications should only need to do this *once* for each table at startup.
 		 */
 		times.start();
-		DataLog::Table table(log);
 		table.writeTable("Test");
 		table.writeField<char[]>(0, "Startup");
 		table.writeField<float>(1, "float1");
 		table.writeField<double>(2, "double2");
 		table.writeField<char[]>(3, "MoreInfo");
+		log.writeTime();
 		times.update();
 
 		/*
 		 * Now write some entries 
 		 */
-		for(int i = 0; i < rounds; ++i) {
+		timer.initializeMs<10>([this] {
 			times.start();
 			logEntry(table);
 			times.update();
-		}
-		Serial << times << endl;
+
+			++round;
+			if(round < rounds) {
+				return;
+			}
+
+			timer.stop();
+			Serial << times << endl;
+			complete();
+		});
+		timer.start();
+		pending();
 	}
 
 	void __noinline logEntry(DataLog::Table& table)
 	{
-		log.writeTime();
-
 		struct __attribute__((packed)) Data {
 			DataLog::Size var0;
 			float float1;
@@ -74,6 +81,10 @@ public:
 
 private:
 	DataLog::Log log;
+	Profiling::MicroTimes times;
+	DataLog::Table table;
+	Timer timer;
+	unsigned round{0};
 };
 
 void REGISTER_TEST(Standard)
