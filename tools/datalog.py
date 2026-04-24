@@ -191,6 +191,7 @@ class Field(Entry):
         Signed = 1,
         Float = 2,
         Char = 3,
+        Blob = 4,
 
     typemap = {
         (Type.Float, 4): ("float", "f", "REAL"),
@@ -236,6 +237,8 @@ class Field(Entry):
         return t[2]
 
     def getValue(self, data):
+        if self.type == Field.Type.Blob:
+            return data[self.offset:self.offset+self.size]
         try:
             fmt = Field.typemap[(self.type, self.size)][1]
         except:

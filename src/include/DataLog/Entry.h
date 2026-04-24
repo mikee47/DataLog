@@ -155,6 +155,7 @@ struct Entry {
 			Signed,
 			Float,
 			Char,
+			Blob,
 		};
 
 		/**
