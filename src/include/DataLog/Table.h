@@ -63,22 +63,22 @@ public:
 
 	template <typename T>
 	typename std::enable_if<!std::is_floating_point<T>::value && std::is_unsigned<T>::value, bool>::type
-	writeField(uint16_t id, const String& name)
+	writeField(uint16_t id, const String& name, bool variable = false)
 	{
-		return writeField(id, Entry::Field::Type::Unsigned, sizeof(T), name);
+		return writeField(id, Entry::Field::Type::Unsigned, sizeof(T), name, variable);
 	}
 
 	template <typename T>
 	typename std::enable_if<!std::is_floating_point<T>::value && std::is_signed<T>::value, bool>::type
-	writeField(uint16_t id, const String& name)
+	writeField(uint16_t id, const String& name, bool variable = false)
 	{
-		return writeField(id, Entry::Field::Type::Signed, sizeof(T), name);
+		return writeField(id, Entry::Field::Type::Signed, sizeof(T), name, variable);
 	}
 
 	template <typename T>
-	typename std::enable_if<std::is_floating_point<T>::value, bool>::type writeField(uint16_t id, const String& name)
+	typename std::enable_if<std::is_floating_point<T>::value, bool>::type writeField(uint16_t id, const String& name, bool variable = false)
 	{
-		return writeField(id, Entry::Field::Type::Float, sizeof(T), name);
+		return writeField(id, Entry::Field::Type::Float, sizeof(T), name, variable);
 	}
 
 	template <typename T>
