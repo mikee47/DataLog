@@ -228,25 +228,30 @@ class Field(Entry):
             self.table.fieldDataSize += 2 if self.isVariable else self.size
             self.table.fields.append(self)
 
+    def get_type(self):
+        if self.type == Field.Type.Blob:
+            return ("uint8_t", "x", "BLOB")
+        return Field.typemap.get((self.type, self.size))
+
     def typestr(self):
-        t = Field.typemap.get((self.type, self.size))
+        t = self.get_type()
         return t[0] if t else f"{self.type.name}{self.size*8}"
 
     def sqltype(self):
-        t = Field.typemap.get((self.type, self.size))
+        t = self.get_type()
         return t[2]
 
     def getValue(self, data):
-        if self.type == Field.Type.Blob:
-            return data[self.offset:self.offset+self.size]
         try:
-            fmt = Field.typemap[(self.type, self.size)][1]
+            fmt = self.get_type()[1]
         except:
             print(f"Bad field type! type {self.type}, size {self.size}, name {self.name}, table {self.table}")
             return 0
         if not self.isVariable:
             try:
-                (value,) = struct.unpack(f"<{fmt}", data[self.offset:self.offset+self.size])
+                value = data[self.offset:self.offset+self.size]
+                if fmt != 'x':
+                    (value,) = struct.unpack(f"<{fmt}", value)
             except:
                 print("fmt:", fmt)
                 print("offset", self.offset, ", size", self.size, ", len", len(data))
@@ -262,10 +267,11 @@ class Field(Entry):
             (fieldLength,) = struct.unpack("<H", data[f.offset:f.offset+2])
             fieldLength *= f.size
             if f is self:
+                value = data[off:off+fieldLength]
                 if fmt == 's':
-                    value = data[off:off+fieldLength].decode()
-                else:
-                    value = array.array(fmt, data[off:off+fieldLength])
+                    value = value.decode()
+                elif fmt != 'x':
+                    value = array.array(fmt, value)
                 break
             off += fieldLength
         return value

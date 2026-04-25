@@ -61,24 +61,30 @@ public:
 		return log.writeEntry(e, name);
 	}
 
-	template <typename T>
-	typename std::enable_if<!std::is_floating_point<T>::value && std::is_unsigned<T>::value, bool>::type
-	writeField(uint16_t id, const String& name, bool variable = false)
+	template <typename U, typename T = typename std::remove_extent<U>::type>
+	typename std::enable_if<!std::is_floating_point<T>::value && std::is_unsigned<T>::value && !std::is_same<T, char>::value, bool>::type
+	writeField(uint16_t id, const String& name)
 	{
-		return writeField(id, Entry::Field::Type::Unsigned, sizeof(T), name, variable);
+		return writeField(id, Entry::Field::Type::Unsigned, sizeof(T), name, std::is_array<U>::value);
 	}
 
-	template <typename T>
-	typename std::enable_if<!std::is_floating_point<T>::value && std::is_signed<T>::value, bool>::type
-	writeField(uint16_t id, const String& name, bool variable = false)
+	template <typename U, typename T = typename std::remove_extent<U>::type>
+	typename std::enable_if<!std::is_floating_point<T>::value && std::is_signed<T>::value && !std::is_same<T, char>::value, bool>::type
+	writeField(uint16_t id, const String& name)
 	{
-		return writeField(id, Entry::Field::Type::Signed, sizeof(T), name, variable);
+		return writeField(id, Entry::Field::Type::Signed, sizeof(T), name, std::is_array<U>::value);
 	}
 
-	template <typename T>
+	template <typename U, typename T = typename std::remove_extent<U>::type>
 	typename std::enable_if<std::is_floating_point<T>::value, bool>::type writeField(uint16_t id, const String& name, bool variable = false)
 	{
-		return writeField(id, Entry::Field::Type::Float, sizeof(T), name, variable);
+		return writeField(id, Entry::Field::Type::Float, sizeof(T), name, std::is_array<U>::value);
+	}
+
+	template <typename U, typename T = typename std::remove_extent<U>::type>
+	typename std::enable_if<std::is_class<T>::value, bool>::type writeField(uint16_t id, const String& name)
+	{
+		return writeField(id, Entry::Field::Type::Blob, sizeof(T), name, std::is_array<U>::value);
 	}
 
 	template <typename T>
