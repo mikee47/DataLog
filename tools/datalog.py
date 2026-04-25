@@ -223,6 +223,8 @@ class Field(Entry):
             self.type = Field.Type(type & 0x7f)
             self.isVariable = (type & 0x80) != 0
             self.name = content[4:].decode()
+            if self.name in ['utc']:
+                self.name = self.name + '_'
         if self.table is not None:
             self.offset = self.table.fieldDataSize
             self.table.fieldDataSize += 2 if self.isVariable else self.size
