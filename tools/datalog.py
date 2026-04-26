@@ -706,6 +706,77 @@ def export_blocks(blocks: BlockList):
 
 
 
+def get_row_to_str(table: Table):
+    def tigo_row_to_str(utc: int, value):
+        if isinstance(value, int):
+            return timestr(value)
+        assert len(value) == 7
+        # Version 1
+        if utc < 1777204980:
+            res = {
+                'vin': ((value[0] | (value[1] << 8)) & 0x0fff) / 10,
+                'vout': ((value[1] & 0x0f) | (value[2] << 4)) / 10,
+                'iin': value[3] / 10,
+                'temp': value[4] / 10,
+                'duty': value[5],
+                'rssi': value[6],
+            }
+        else:
+            a, = struct.unpack('<L', value[:4])
+            b, = struct.unpack('<l', value[:4])
+
+            # Version 2
+            res = {
+                'vin': (a & 0x03ff) / 10,
+                'vout': ((a >> 10) & 0x03ff) / 10,
+                'iin': value[4] / 10,
+                'temp': (b >> 22) / 10,
+                'duty': value[5],
+                'rssi': value[6],
+            }
+        res['power'] = round(res['vin'] * res['iin'])
+        vd = (res['vout'] * 255 / res['duty']) if res['duty'] else 0
+        res['loss'] = round((res['vin'] - vd) * res['iin'], 1)
+        return res
+
+    def tigo_row_to_str_raw(utc: int, value):
+        if isinstance(value, int):
+            return timestr(value)
+        assert len(value) == 8
+
+        a, b = struct.unpack('<LL', value)
+
+        # Multiply report values to get actual value
+        VIN_SCALE = 50/1000
+        VOUT_SCALE = 100/1000
+        IIN_SCALE = 5/1000
+        TEMP_SCALE = 1/10
+
+        res = {
+            'vin': round((a & 0x0fff) * VIN_SCALE, 2),
+            'vout': round(((a >> 12) & 0x0fff) * VOUT_SCALE, 1),
+            'iin': round((b & 0x0fff) * IIN_SCALE, 3),
+            'temp': round(((b >> 12) & 0x0fff) * TEMP_SCALE, 1),
+            'duty': a >> 24,
+            'rssi': b >> 24,
+        }
+        res['power'] = round(res['vin'] * res['iin'])
+        vd = (res['vout'] * 255 / res['duty']) if res['duty'] else 0
+        res['loss'] = round((res['vin'] - vd) * res['iin'], 1)
+        return res
+
+    def empty_row_to_str(utc: int, value):
+        return ''
+
+    if 'A1' not in table.fields:
+        return empty_row_to_str
+    return {
+        'Data': tigo_row_to_str,
+        'RawData': tigo_row_to_str_raw,
+    }.get(table.name, empty_row_to_str)
+
+
+
 def dump_blocks(blocks: BlockList):
     log = DataLog()
     for b in sorted(blocks):
@@ -721,8 +792,11 @@ def dump_blocks(blocks: BlockList):
     for entry in log.entries:
         print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {entry.kind.name}: {entry}")
         if verbose and entry.kind == Kind.data and entry.table is not None:
+            row_to_str = get_row_to_str(entry.table)
+            utc = entry.getUtc()
             for f in entry.table.fields:
-                print(f"  {f.id:#5} {f.name} = {f.getValue(entry.data)}")
+                value = f.getValue(entry.data)
+                print(f"  {f.id:#5} {f.name} = {value}", row_to_str(utc, value))
 
     printData()
 
@@ -752,16 +826,17 @@ def dump_tables(blocks: BlockList):
         entry.table.rows.append(entry)
 
     for table in tables:
+        row_to_str = get_row_to_str(table)
         print()
         print('TABLE:', table.name)
-        print('FIELDS:', ', '.join(f.name for f in  table.fields))
+        print('FIELDS:', ', '.join(f.name for f in table.fields))
         for row in table.rows:
             if verbose:
                 utc = row.getUtc()
                 print(timestr(utc))
                 for f in table.fields:
                     value = f.getValue(row.data)
-                    print(f"  {f.id:#5} {f.name} = {value}")
+                    print(f"  {f.id:#5} {f.name} = {value}", row_to_str(utc, value))
             else:
                 values = [str(f.getValue(row.data)) for f in table.fields]
                 print(timestr(row.getUtc()), ':', ', '.join(values))
