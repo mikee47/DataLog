@@ -510,6 +510,218 @@ class DataLog:
             pass
 
 
+
+def compact_blocks(filenames: list[str]):
+    files = []
+    for f in filenames:
+        blocks = BlockList()
+        blocks.loadFromFile(f)
+        if len(blocks) != 0:
+            files.append((f, blocks))
+
+    endBlock = 0
+    files.sort(key = lambda x: (min(x[1]) << 16) + max(x[1]))
+    for f in files:
+        filename = f[0]
+        blocks = f[1]
+        first = min(blocks)
+        last = max(blocks)
+        print(filename)
+        while first <= endBlock and first <= last:
+            if first in blocks:
+                del blocks[first]
+            first += 1
+        if last < endBlock:
+            print("GAP!!!")
+        if first > last:
+            print("EMPTY!!")
+        endBlock = last
+        st = os.stat(filename)
+        blocks.saveToFile(filename)
+        os.utime(filename, (st.st_atime, st.st_mtime))
+        newFileName = os.path.split(filename)[0] + f"/datalog-%08x-%08x.bin" % (first, last)
+        if newFileName != filename:
+            print(f"{filename} -> {newFileName}")
+            os.rename(filename, newFileName)
+
+
+
+def fetch_blocks(blocks, url: str):
+    print(f"FETCH {url}")
+    server, path = url.split('/', 1)
+    if os.path.exists(FILE_NEXTSEQ):
+        with open(FILE_NEXTSEQ) as f:
+            startBlock = int(f.read(), 0)
+        print("startBlock %x" % startBlock)
+    else:
+        startBlock = 0
+
+    attempt = 0
+    while True:
+        try:
+            conn = http.client.HTTPConnection(server, timeout=10)
+            conn.request("GET", f"/{path}?start={startBlock}")
+            rsp = conn.getresponse()
+            print(rsp.status, rsp.reason)
+            data = rsp.read()
+            print(f"{len(data)} bytes received")
+            break
+        except socket.timeout as e:
+            attempt += 1
+            print(f"{e}, attempt {attempt}")
+            if attempt > 3:
+                raise
+
+    startBlock = None
+    endBlock = None
+    if len(data) != 0:
+        newBlockCount = 0
+        off = 0
+        while off < len(data):
+            block = Block.parse(data[off:off+Block.SIZE])
+            off += Block.SIZE
+            if block is None:
+                continue
+            if startBlock is None:
+                startBlock = block
+            endBlock = block
+            if verbose:
+                print(block)
+            blocks.append(block)
+            newBlockCount += 1
+    if startBlock is None:
+        print("No valid blocks received")
+    else:
+        endSequence = endBlock.sequence
+        if endBlock.isFull():
+            nextSequence = endSequence + 1
+        else:
+            nextSequence = endSequence
+            endSequence -= 1
+        tail = len(data) % Block.SIZE
+        off = len(data) - tail
+        if endSequence >= startBlock.sequence:
+            filename = FILE_DATALOG % (startBlock.sequence, endSequence)
+            with open(filename, "wb") as f:
+                f.write(data[:off])
+        with open(FILE_TAIL, "wb") as f:
+            f.write(data[off:])
+        with open(FILE_NEXTSEQ, "w") as f:
+            f.write(hex(nextSequence))
+        print("tail %u, next %x" % (tail, nextSequence))
+        
+
+def export_blocks(blocks: BlockList):
+    SYSTABLE_PREFIX = '__'
+    SYSTABLE_NAME = SYSTABLE_PREFIX + 'datalog'
+
+    log = DataLog()
+    log.loadContext('context.json')
+    for b in sorted(blocks):
+        log.loadBlock(blocks[b])
+    print(f"{len(log.entries)} new entries loaded")
+
+    tables = {}
+    sysTables = []
+    con = sqlite3.connect('datalog.db')
+    cur = con.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    for r in cur:
+        tableName = r[0]
+        if tableName.startswith(SYSTABLE_PREFIX):
+            sysTables.append(tableName)
+        else:
+            r = con.execute(f"SELECT max(utc) FROM [{tableName}];").fetchone()
+            columns = [c[1] for c in con.execute(f"PRAGMA table_info('{tableName}');")]
+            tableInfo = dict(utc=r[0], entry=None, columns=columns)
+            tables[tableName] = tableInfo
+
+    if SYSTABLE_NAME not in sysTables:
+        con.execute(f"CREATE TABLE [{SYSTABLE_NAME}](utc DATETIME, kind TEXT, comment TEXT)")
+
+    exportCount = 0
+    skipCount = 0
+    for entry in log.entries:
+        if entry.kind == Kind.boot or entry.kind == Kind.exception:
+            if entry.time is not None:
+                con.execute(f"INSERT INTO [{SYSTABLE_NAME}](utc, kind, comment) VALUES({entry.time}, ?, ?);", (entry.kind.name, str(entry)))
+            continue
+        if entry.kind != Kind.data or entry.table is None:
+            continue
+
+        tableName = entry.table.name
+        fields = entry.table.fields
+        tableInfo = tables.get(tableName)
+        if tableInfo is None:
+            # Create database table
+            columnDefs = ",\n".join(f"  [{f.name}] {f.sqltype()}" for f in fields)
+            stmt = f"CREATE TABLE [{tableName}] (\n  utc DATETIME PRIMARY KEY NOT NULL,\n{columnDefs});"
+            print(stmt)
+            con.execute(stmt)
+            tableInfo = dict(utc=0, entry=entry.table, columns=[f.name for f in fields])
+            tables[tableName] = tableInfo
+            con.commit()
+        elif entry.table != tableInfo['entry']:
+            # Check for new fields and amend database table definition
+            columns = tableInfo['columns']
+            for f in fields:
+                if f.name in columns:
+                    continue
+                stmt = f"ALTER TABLE [{tableName}] ADD COLUMN [{f.name}] {f.sqltype()};"
+                print(stmt)
+                con.execute(stmt)
+                columns.append(f.name)
+            tableInfo['entry'] = entry.table
+
+        utc =  entry.getUtc()
+        if utc <= tables[tableName]['utc']:
+            skipCount += 1
+            continue
+
+        columnNames = ", ".join(f"[{f.name}]" for f in fields)
+        stmt = f"INSERT INTO [{tableName}](utc, {columnNames}) VALUES({utc}, {', '.join('?' for f in fields)});"
+        values = tuple(f.getValue(entry.data) for f in fields)
+        if verbose:
+            print(stmt, list(values))
+        try:
+            con.execute(stmt, values)
+            tables[tableName]['utc'] = entry.getUtc()
+            exportCount += 1
+        except (sqlite3.OperationalError) as err:
+            print(err)
+            print(stmt)
+        except sqlite3.IntegrityError:
+            pass
+
+    con.commit()
+    log.saveContext('context.json')
+
+    print(f"{exportCount} entries exported")
+    print(f"{skipCount} existing entries skipped")
+
+
+
+def dump_blocks(blocks: BlockList):
+    log = DataLog()
+    for b in sorted(blocks):
+        log.loadBlock(blocks[b])
+    print(f"{len(log.entries)} entries loaded")
+
+    dataCount = 0
+
+    def printData():
+        if dataCount != 0:
+            print(f"Kind.data x {dataCount}")
+
+    for entry in log.entries:
+        print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {entry.kind.name}: {entry}")
+        if verbose and entry.kind == Kind.data and entry.table is not None:
+            for f in entry.table.fields:
+                print(f"  {f.id:#5} {f.name} = {f.getValue(entry.data)}")
+
+    printData()
+
+
+
 def main():
     parser = argparse.ArgumentParser(description='DataLog tool')
     parser.add_argument('input', nargs='*', help='Log file to read')
@@ -525,38 +737,7 @@ def main():
     verbose = args.verbose
 
     if args.compact:
-        files = []
-        for f in args.input:
-            blocks = BlockList()
-            blocks.loadFromFile(f)
-            if len(blocks) != 0:
-                files.append((f, blocks))
-
-        endBlock = 0
-        files.sort(key = lambda x: (min(x[1]) << 16) + max(x[1]))
-        for f in files:
-            filename = f[0]
-            blocks = f[1]
-            first = min(blocks)
-            last = max(blocks)
-            print(filename)
-            while first <= endBlock and first <= last:
-                if first in blocks:
-                    del blocks[first]
-                first += 1
-            if last < endBlock:
-                print("GAP!!!")
-            if first > last:
-                print("EMPTY!!")
-            endBlock = last
-            st = os.stat(filename)
-            blocks.saveToFile(filename)
-            os.utime(filename, (st.st_atime, st.st_mtime))
-            newFileName = os.path.split(filename)[0] + f"/datalog-%08x-%08x.bin" % (first, last)
-            if newFileName != filename:
-                print(f"{filename} -> {newFileName}")
-                os.rename(filename, newFileName)
-
+        compact_blocks(args.input)
         return
 
 
@@ -581,177 +762,14 @@ def main():
             print(f"{len(missing)} blocks missing: ", ", ".join(hex(x) for x in missing))
 
     if args.fetch:
-        print(f"FETCH {args.fetch}")
-        server, path = args.fetch.split('/', 1)
-        if os.path.exists(FILE_NEXTSEQ):
-            with open(FILE_NEXTSEQ) as f:
-                startBlock = int(f.read(), 0)
-            print("startBlock %x" % startBlock)
-        else:
-            startBlock = 0
-
-        attempt = 0
-        while True:
-            try:
-                conn = http.client.HTTPConnection(server, timeout=10)
-                conn.request("GET", f"/{path}?start={startBlock}")
-                rsp = conn.getresponse()
-                print(rsp.status, rsp.reason)
-                data = rsp.read()
-                print(f"{len(data)} bytes received")
-                break
-            except socket.timeout as e:
-                attempt += 1
-                print(f"{e}, attempt {attempt}")
-                if attempt > 3:
-                    raise
-
-        startBlock = None
-        endBlock = None
-        if len(data) != 0:
-            newBlockCount = 0
-            off = 0
-            while off < len(data):
-                block = Block.parse(data[off:off+Block.SIZE])
-                off += Block.SIZE
-                if block is None:
-                    continue
-                if startBlock is None:
-                    startBlock = block
-                endBlock = block
-                if verbose:
-                    print(block)
-                blocks.append(block)
-                newBlockCount += 1
-        if startBlock is None:
-            print("No valid blocks received")
-        else:
-            endSequence = endBlock.sequence
-            if endBlock.isFull():
-                nextSequence = endSequence + 1
-            else:
-                nextSequence = endSequence
-                endSequence -= 1
-            tail = len(data) % Block.SIZE
-            off = len(data) - tail
-            if endSequence >= startBlock.sequence:
-                filename = FILE_DATALOG % (startBlock.sequence, endSequence)
-                with open(filename, "wb") as f:
-                    f.write(data[:off])
-            with open(FILE_TAIL, "wb") as f:
-                f.write(data[off:])
-            with open(FILE_NEXTSEQ, "w") as f:
-                f.write(hex(nextSequence))
-            print("tail %u, next %x" % (tail, nextSequence))
-            
+        fetch_blocks(blocks, args.fetch)
 
     if args.dump:
-        log = DataLog()
-        for b in sorted(blocks):
-            log.loadBlock(blocks[b])
-        print(f"{len(log.entries)} entries loaded")
-
-        dataCount = 0
-
-        def printData():
-            if dataCount != 0:
-                print(f"Kind.data x {dataCount}")
-
-        for entry in log.entries:
-            print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {entry.kind.name}: {entry}")
-            if verbose and entry.kind == Kind.data and entry.table is not None:
-                for f in entry.table.fields:
-                    print(f"  {f.id:#5} {f.name} = {f.getValue(entry.data)}")
-
-        printData()
-
-
-    SYSTABLE_PREFIX = '__'
-    SYSTABLE_NAME = SYSTABLE_PREFIX + 'datalog'
+        dump_blocks(blocks)
 
     if args.export:
-        log = DataLog()
-        log.loadContext('context.json')
-        for b in sorted(blocks):
-            log.loadBlock(blocks[b])
-        print(f"{len(log.entries)} new entries loaded")
+        export_blocks(blocks)
 
-        tables = {}
-        sysTables = []
-        con = sqlite3.connect('datalog.db')
-        cur = con.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        for r in cur:
-            tableName = r[0]
-            if tableName.startswith(SYSTABLE_PREFIX):
-                sysTables.append(tableName)
-            else:
-                r = con.execute(f"SELECT max(utc) FROM [{tableName}];").fetchone()
-                columns = [c[1] for c in con.execute(f"PRAGMA table_info('{tableName}');")]
-                tableInfo = dict(utc=r[0], entry=None, columns=columns)
-                tables[tableName] = tableInfo
-
-        if SYSTABLE_NAME not in sysTables:
-            con.execute(f"CREATE TABLE [{SYSTABLE_NAME}](utc DATETIME, kind TEXT, comment TEXT)")
-
-        exportCount = 0
-        skipCount = 0
-        for entry in log.entries:
-            if entry.kind == Kind.boot or entry.kind == Kind.exception:
-                if entry.time is not None:
-                    con.execute(f"INSERT INTO [{SYSTABLE_NAME}](utc, kind, comment) VALUES({entry.time}, ?, ?);", (entry.kind.name, str(entry)))
-                continue
-            if entry.kind != Kind.data or entry.table is None:
-                continue
-
-            tableName = entry.table.name
-            fields = entry.table.fields
-            tableInfo = tables.get(tableName)
-            if tableInfo is None:
-                # Create database table
-                columnDefs = ",\n".join(f"  [{f.name}] {f.sqltype()}" for f in fields)
-                stmt = f"CREATE TABLE [{tableName}] (\n  utc DATETIME PRIMARY KEY NOT NULL,\n{columnDefs});"
-                print(stmt)
-                con.execute(stmt)
-                tableInfo = dict(utc=0, entry=entry.table, columns=[f.name for f in fields])
-                tables[tableName] = tableInfo
-                con.commit()
-            elif entry.table != tableInfo['entry']:
-                # Check for new fields and amend database table definition
-                columns = tableInfo['columns']
-                for f in fields:
-                    if f.name in columns:
-                        continue
-                    stmt = f"ALTER TABLE [{tableName}] ADD COLUMN [{f.name}] {f.sqltype()};"
-                    print(stmt)
-                    con.execute(stmt)
-                    columns.append(f.name)
-                tableInfo['entry'] = entry.table
-
-            utc =  entry.getUtc()
-            if utc <= tables[tableName]['utc']:
-                skipCount += 1
-                continue
-
-            columnNames = ", ".join(f"[{f.name}]" for f in fields)
-            stmt = f"INSERT INTO [{tableName}](utc, {columnNames}) VALUES({utc}, {', '.join('?' for f in fields)});"
-            values = tuple(f.getValue(entry.data) for f in fields)
-            if verbose:
-                print(stmt, list(values))
-            try:
-                con.execute(stmt, values)
-                tables[tableName]['utc'] = entry.getUtc()
-                exportCount += 1
-            except (sqlite3.OperationalError) as err:
-                print(err)
-                print(stmt)
-            except sqlite3.IntegrityError:
-                pass
-
-        con.commit()
-        log.saveContext('context.json')
-
-        print(f"{exportCount} entries exported")
-        print(f"{skipCount} existing entries skipped")
 
 
 if __name__ == "__main__":
