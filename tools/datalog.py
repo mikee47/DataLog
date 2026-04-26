@@ -23,9 +23,10 @@ from enum import IntEnum
 
 verbose = False
 
-FILE_DATALOG = "logs/datalog-%08x-%08x.bin"
-FILE_NEXTSEQ = "logs/next.seq"
-FILE_TAIL = "logs/tail.bin"
+PATH_DATALOG = "logs"
+FILE_DATALOG = PATH_DATALOG + "/datalog-%08x-%08x.bin"
+FILE_NEXTSEQ = PATH_DATALOG + "/next.seq"
+FILE_TAIL = PATH_DATALOG + "/tail.bin"
 
 SYSTABLE_PREFIX = '__'
 SYSTABLE_NAME = SYSTABLE_PREFIX + 'datalog'
@@ -606,6 +607,7 @@ def fetch_blocks(blocks, url: str):
             endSequence -= 1
         tail = len(data) % Block.SIZE
         off = len(data) - tail
+        os.makedirs(PATH_DATALOG, exist_ok = True)
         if endSequence >= startBlock.sequence:
             filename = FILE_DATALOG % (startBlock.sequence, endSequence)
             with open(filename, "wb") as f:
