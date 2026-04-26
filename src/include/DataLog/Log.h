@@ -122,6 +122,16 @@ public:
 		return endBlock.sequence - startBlock.sequence;
 	}
 
+	uint32_t getWriteOffset() const
+	{
+		return writeOffset;
+	}
+
+	uint32_t getTotalSize() const
+	{
+		return totalBlocks * blockSize;
+	}
+
 	Entry::Table::ID allocateTableId()
 	{
 		++tableCount;
