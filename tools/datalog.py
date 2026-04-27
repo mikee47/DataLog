@@ -27,6 +27,9 @@ FILE_DATALOG = "logs/datalog-%08x-%08x.bin"
 FILE_NEXTSEQ = "logs/next.seq"
 FILE_TAIL = "logs/tail.bin"
 
+SYSTABLE_PREFIX = '__'
+SYSTABLE_NAME = SYSTABLE_PREFIX + 'datalog'
+
 
 def printProperties(obj):
     print(f"Properties for {type(obj)}:")
@@ -59,7 +62,7 @@ def timestr(utc):
 
 class Entry:
     @classmethod
-    def read(cls, block, offset, ctx):
+    def read(cls, block, offset, log: 'DataLog'):
         map = {
             Kind.boot: Boot,
             Kind.time: Time,
@@ -79,12 +82,12 @@ class Entry:
         if flags == 0xfe:
             if kind in map:
                 try:
-                    entry = map[kind](content, ctx)
+                    entry = map[kind](content, log)
                 except (UnicodeDecodeError, IndexError, struct.error, ValueError) as err:
                     entry = None
                     print(f"seq {block.sequence:#x} @{offset:#010x} {Kind(kind).name}, size {entrySize}, flags {flags}, {type(err).__name__}: {err}")
             if entry is None:
-                entry = UnknownEntry(kind, content, ctx)
+                entry = UnknownEntry(kind, content, log)
         elif flags != 0xff:
             print(f"Corrupt block {block.sequence:#x}, skipping from offset {offset:#x}")
             return None, 0
@@ -97,12 +100,12 @@ class Entry:
     def isValid(self):
         return True
 
-    def fixup(self, ctx):
+    def fixup(self, log):
         return True
 
 
 class UnknownEntry(Entry):
-    def __init__(self, kind, content, ctx):
+    def __init__(self, kind, content, log):
         self.kind = Kind(kind)
         self.content = content
 
@@ -120,30 +123,30 @@ class Boot(Entry):
         DeepSleepAwake = 5,
         ExtSysReset = 6,
 
-    def __init__(self, content, ctx):
+    def __init__(self, content, log):
         self.time = None
         self.kind = Kind.boot
         self.reason = Boot.Reason(content[0])
-        ctx.reset()
+        log.reset()
 
     def __str__(self):
         return f"reason {self.reason.name}"
 
-    def fixup(self, ctx):
+    def fixup(self, log):
         if self.time is None:
-            self.time = ctx.time.getUtc(0)
+            self.time = log.time.getUtc(0)
             return True
         return False
 
 class Time(Entry):
-    def __init__(self, content, ctx):
+    def __init__(self, content, log):
         self.kind = Kind.time
         if isinstance(content, dict):
             self.systemTime = content['systemTime']
             self.utc = content['utc']
         else:
             (self.systemTime, self.utc) = struct.unpack("<II", content)
-            self.systemTime = ctx.checkTime(self.systemTime)
+            self.systemTime = log.checkTime(self.systemTime)
 
     def __str__(self):
         return "systemTime %u, %s" % (self.systemTime, timestr(self.utc))
@@ -159,20 +162,20 @@ class Time(Entry):
 
 
 class Table(Entry):
-    def __init__(self, content, ctx):
+    def __init__(self, content, log):
         self.kind = Kind.table
         self.fields = []
         self.fieldDataSize = 0
-        ctx.table = self
+        log.table = self
         if isinstance(content, dict):
             self.id = content['id']
             self.name = content['name']
             for f in content['fields']:
-                Field(f, ctx)
+                Field(f, log)
         else:
             (self.id,) = struct.unpack("<H", content[:2])
             self.name = content[2:].decode()
-        ctx.tables[self.id] = self
+        log.tables[self.id] = self
 
     def __str__(self):
         return "id %u, name '%s'" % (self.id, self.name)
@@ -207,9 +210,9 @@ class Field(Entry):
         (Type.Char, 1): ("char", "s", "TEXT"),
     }
 
-    def __init__(self, content, ctx):
+    def __init__(self, content, log):
         self.kind = Kind.field
-        self.table = ctx.table
+        self.table = log.table
         if isinstance(content, dict):
             self.id = content['id']
             self.name = content['name']
@@ -278,6 +281,9 @@ class Field(Entry):
             off += fieldLength
         return value
 
+    def __eq__(self, name):
+        return self.name == name
+
     def __str__(self):
         s = "?" if self.table is None else self.table.name
         s += f", id {self.id}, {self.typestr()}, name '{self.name}'"
@@ -294,13 +300,13 @@ class Field(Entry):
 
 
 class Data(Entry):
-    def __init__(self, content, ctx):
+    def __init__(self, content, log):
         self.kind = Kind.data
-        self.time = ctx.time
+        self.time = log.time
         (self.systemTime, self.table_id, self.reserved) = struct.unpack("<IHH", content[:8])
-        self.table = ctx.tables.get(self.table_id)
+        self.table = log.tables.get(self.table_id)
         self.data = content[8:]
-        self.systemTime = ctx.checkTime(self.systemTime)
+        self.systemTime = log.checkTime(self.systemTime)
 
     def getUtc(self):
         return self.time.getUtc(self.systemTime) if self.time else 0
@@ -317,15 +323,15 @@ class Data(Entry):
             s += ", ".join(str(f.getValue(self.data)) for f in self.table.fields)
         return s
 
-    def fixup(self, ctx):
+    def fixup(self, log):
         if self.time is None:
-            self.time = ctx.time
+            self.time = log.time
             return True
         return False
 
 
 class Exception(Entry):
-    def __init__(self, content, ctx):
+    def __init__(self, content, log):
         self.kind = Kind.exception
         self.time = None
         (self.cause, self.epc1, self.epc2, self.epc3, self.excvaddr, self.depc) = struct.unpack("<6I", content[:24])
@@ -338,13 +344,13 @@ class Exception(Entry):
             s += ", ".join(f"{e:#010x}" for e in self.stack)
         return s
 
-    def fixup(self, ctx):
+    def fixup(self, log):
         if self.time is None:
-            self.time = ctx.time.getUtc(0)
+            self.time = log.time.getUtc(0)
 
 
 class Map(Entry):
-    def __init__(self, content, ctx):
+    def __init__(self, content, log):
         self.kind = Kind.map
         self.map = array.array("I", content)
 
@@ -609,12 +615,10 @@ def fetch_blocks(blocks, url: str):
         with open(FILE_NEXTSEQ, "w") as f:
             f.write(hex(nextSequence))
         print("tail %u, next %x" % (tail, nextSequence))
-        
+
+
 
 def export_blocks(blocks: BlockList):
-    SYSTABLE_PREFIX = '__'
-    SYSTABLE_NAME = SYSTABLE_PREFIX + 'datalog'
-
     log = DataLog()
     log.loadContext('context.json')
     for b in sorted(blocks):
@@ -722,12 +726,54 @@ def dump_blocks(blocks: BlockList):
 
 
 
+def dump_tables(blocks: BlockList):
+    log = DataLog()
+    for b in blocks:
+        log.loadBlock(blocks[b])
+    print(f"{len(log.entries)} entries loaded")
+
+    tables = []
+    sys_tables = []
+
+    table = None
+    exportCount = 0
+    for entry in log.entries:
+        if entry.kind in [Kind.boot, Kind.exception]:
+            sys_tables.append(entry)
+            continue
+        if entry.kind != Kind.data or entry.table is None:
+            continue
+
+        if entry.table not in tables:
+            tables.append(entry.table)
+            entry.table.rows = []
+        entry.table.rows.append(entry)
+
+    for table in tables:
+        print()
+        print('TABLE:', table.name)
+        print('FIELDS:', ', '.join(f.name for f in  table.fields))
+        for row in table.rows:
+            if verbose:
+                utc = row.getUtc()
+                print(timestr(utc))
+                for f in table.fields:
+                    value = f.getValue(row.data)
+                    print(f"  {f.id:#5} {f.name} = {value}")
+            else:
+                values = [str(f.getValue(row.data)) for f in table.fields]
+                print(timestr(row.getUtc()), ':', ', '.join(values))
+        print()
+
+
+
 def main():
     parser = argparse.ArgumentParser(description='DataLog tool')
     parser.add_argument('input', nargs='*', help='Log file to read')
     parser.add_argument('--fetch', metavar='PATH', help='http path to datalog server')
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--dump', action='store_true')
+    parser.add_argument('--tables', action='store_true', help='Show table summary')
     parser.add_argument('--export', action='store_true', help='Export data to sqlite')
     parser.add_argument('--compact', action='store_true')
 
@@ -770,6 +816,8 @@ def main():
     if args.export:
         export_blocks(blocks)
 
+    if args.tables:
+        dump_tables(blocks)
 
 
 if __name__ == "__main__":
