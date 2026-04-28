@@ -406,6 +406,11 @@ class Block:
 
 class BlockList(dict):
     def loadFromFile(self, filename):
+        if isinstance(filename, list):
+            for f in filename:
+                self.loadFromFile(f)
+            return
+
         f = open(filename, "rb")
         f.seek(0, os.SEEK_END)
         fileSize = f.tell()
@@ -467,7 +472,12 @@ class DataLog:
         self.prevSystemTime = t
         return t + self.highTime * round((1 << 32) / 1000)
 
-    def loadBlock(self, block):
+    def loadBlocks(self, block):
+        if isinstance(block, BlockList):
+            for b in sorted(block):
+                self.loadBlocks(block[b])
+            return
+
         off = 0
         if block.sequence < self.lastBlockSequence:
             return
@@ -633,8 +643,7 @@ def sqlexport_blocks(blocks: BlockList, filename: str):
     log = DataLog()
     context_file = filename + '.context'
     log.loadContext(context_file)
-    for b in sorted(blocks):
-        log.loadBlock(blocks[b])
+    log.loadBlocks(blocks)
     print(f"{len(log.entries)} new entries loaded")
 
     tables = {}
@@ -716,84 +725,9 @@ def sqlexport_blocks(blocks: BlockList, filename: str):
 
 
 
-def decode_value(entry: Entry, value):
-    def tigo_decode():
-        if 'A1' not in entry.table.fields:
-            return ''
-        if isinstance(value, int):
-            return timestr(value)
-        assert len(value) == 7
-        utc = entry.getUtc()
-        # Version 1
-        if utc < 1777204980:
-            res = {
-                'vin': ((value[0] | (value[1] << 8)) & 0x0fff) / 10,
-                'vout': ((value[1] & 0x0f) | (value[2] << 4)) / 10,
-                'iin': value[3] / 10,
-                'temp': value[4] / 10,
-                'duty': value[5],
-                'rssi': value[6],
-            }
-        else:
-            a, = struct.unpack('<L', value[:4])
-            b, = struct.unpack('<l', value[:4])
-
-            # Version 2
-            res = {
-                'vin': (a & 0x03ff) / 10,
-                'vout': ((a >> 10) & 0x03ff) / 10,
-                'iin': value[4] / 10,
-                'temp': (b >> 22) / 10,
-                'duty': value[5],
-                'rssi': value[6],
-            }
-        res['power'] = round(res['vin'] * res['iin'])
-        vd = (res['vout'] * 255 / res['duty']) if res['duty'] else 0
-        res['loss'] = round((res['vin'] - vd) * res['iin'], 1)
-        return res
-
-    def tigo_decode_raw():
-        if 'A1' not in entry.table.fields:
-            return ''
-        if isinstance(value, int):
-            return timestr(value)
-        assert len(value) == 8
-
-        a, b = struct.unpack('<LL', value)
-
-        # Multiply report values to get actual value
-        VIN_SCALE = 50/1000
-        VOUT_SCALE = 100/1000
-        IIN_SCALE = 5/1000
-        TEMP_SCALE = 1/10
-
-        res = {
-            'vin': round((a & 0x0fff) * VIN_SCALE, 2),
-            'vout': round(((a >> 12) & 0x0fff) * VOUT_SCALE, 1),
-            'iin': round((b & 0x0fff) * IIN_SCALE, 3),
-            'temp': round(((b >> 12) & 0x0fff) * TEMP_SCALE, 1),
-            'duty': a >> 24,
-            'rssi': b >> 24,
-        }
-        res['power'] = round(res['vin'] * res['iin'])
-        vd = (res['vout'] * 255 / res['duty']) if res['duty'] else 0
-        res['loss'] = round((res['vin'] - vd) * res['iin'], 1)
-        return res
-
-    def decode_none():
-        return ''
-
-    return {
-        'Data': tigo_decode,
-        'RawData': tigo_decode_raw,
-    }.get(entry.table.name, decode_none)()
-
-
-
 def dump_blocks(blocks: BlockList):
     log = DataLog()
-    for b in sorted(blocks):
-        log.loadBlock(blocks[b])
+    log.loadBlocks(blocks)
     print(f"{len(log.entries)} entries loaded")
 
     dataCount = 0
@@ -807,7 +741,7 @@ def dump_blocks(blocks: BlockList):
         if verbose and entry.kind == Kind.data and entry.table is not None:
             for f in entry.table.fields:
                 value = f.getValue(entry.data)
-                print(f"  {f.id:#5} {f.name} = {value}", decode_value(entry, value))
+                print(f"  {f.id:#5} {f.name} = {value}")
 
     printData()
 
@@ -815,8 +749,7 @@ def dump_blocks(blocks: BlockList):
 
 def dump_tables(blocks: BlockList):
     log = DataLog()
-    for b in blocks:
-        log.loadBlock(blocks[b])
+    log.loadBlocks(blocks)
     print(f"{len(log.entries)} entries loaded")
 
     tables = []
@@ -846,7 +779,7 @@ def dump_tables(blocks: BlockList):
                 print(timestr(utc))
                 for f in table.fields:
                     value = f.getValue(row.data)
-                    print(f"  {f.id:#5} {f.name} = {value}", decode_value(row, value))
+                    print(f"  {f.id:#5} {f.name} = {value}")
             else:
                 values = [str(f.getValue(row.data)) for f in table.fields]
                 print(timestr(utc), ':', ', '.join(values))
@@ -875,8 +808,7 @@ def main():
 
 
     blocks = BlockList()
-    for f in args.input:
-        blocks.loadFromFile(f)
+    blocks.loadFromFile(args.input)
 
     if len(blocks) == 0:
         lastBlock = 0
