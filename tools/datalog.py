@@ -18,7 +18,16 @@
 # If not, see <https://www.gnu.org/licenses/>.
 #
 
-import os, json, sys, struct, time, array, argparse, pickle, sqlite3, http.client, socket
+import os
+import json
+import sys
+import struct
+import time
+import array
+import argparse
+import sqlite3
+import http.client
+import socket
 from enum import IntEnum
 
 verbose = False
@@ -620,9 +629,10 @@ def fetch_blocks(blocks, url: str):
 
 
 
-def export_blocks(blocks: BlockList):
+def sqlexport_blocks(blocks: BlockList, filename: str):
     log = DataLog()
-    log.loadContext('context.json')
+    context_file = filename + '.context'
+    log.loadContext(context_file)
     for b in sorted(blocks):
         log.loadBlock(blocks[b])
     print(f"{len(log.entries)} new entries loaded")
@@ -699,18 +709,21 @@ def export_blocks(blocks: BlockList):
             pass
 
     con.commit()
-    log.saveContext('context.json')
+    log.saveContext(context_file)
 
     print(f"{exportCount} entries exported")
     print(f"{skipCount} existing entries skipped")
 
 
 
-def get_row_to_str(table: Table):
-    def tigo_row_to_str(utc: int, value):
+def decode_value(entry: Entry, value):
+    def tigo_decode():
+        if 'A1' not in entry.table.fields:
+            return ''
         if isinstance(value, int):
             return timestr(value)
         assert len(value) == 7
+        utc = entry.getUtc()
         # Version 1
         if utc < 1777204980:
             res = {
@@ -739,7 +752,9 @@ def get_row_to_str(table: Table):
         res['loss'] = round((res['vin'] - vd) * res['iin'], 1)
         return res
 
-    def tigo_row_to_str_raw(utc: int, value):
+    def tigo_decode_raw():
+        if 'A1' not in entry.table.fields:
+            return ''
         if isinstance(value, int):
             return timestr(value)
         assert len(value) == 8
@@ -765,15 +780,13 @@ def get_row_to_str(table: Table):
         res['loss'] = round((res['vin'] - vd) * res['iin'], 1)
         return res
 
-    def empty_row_to_str(utc: int, value):
+    def decode_none():
         return ''
 
-    if 'A1' not in table.fields:
-        return empty_row_to_str
     return {
-        'Data': tigo_row_to_str,
-        'RawData': tigo_row_to_str_raw,
-    }.get(table.name, empty_row_to_str)
+        'Data': tigo_decode,
+        'RawData': tigo_decode_raw,
+    }.get(entry.table.name, decode_none)()
 
 
 
@@ -792,11 +805,9 @@ def dump_blocks(blocks: BlockList):
     for entry in log.entries:
         print(f"{entry.block.sequence:#x} @ {entry.blockOffset:#x} {entry.kind.name}: {entry}")
         if verbose and entry.kind == Kind.data and entry.table is not None:
-            row_to_str = get_row_to_str(entry.table)
-            utc = entry.getUtc()
             for f in entry.table.fields:
                 value = f.getValue(entry.data)
-                print(f"  {f.id:#5} {f.name} = {value}", row_to_str(utc, value))
+                print(f"  {f.id:#5} {f.name} = {value}", decode_value(entry, value))
 
     printData()
 
@@ -826,20 +837,19 @@ def dump_tables(blocks: BlockList):
         entry.table.rows.append(entry)
 
     for table in tables:
-        row_to_str = get_row_to_str(table)
         print()
         print('TABLE:', table.name)
         print('FIELDS:', ', '.join(f.name for f in table.fields))
         for row in table.rows:
+            utc = row.getUtc()
             if verbose:
-                utc = row.getUtc()
                 print(timestr(utc))
                 for f in table.fields:
                     value = f.getValue(row.data)
-                    print(f"  {f.id:#5} {f.name} = {value}", row_to_str(utc, value))
+                    print(f"  {f.id:#5} {f.name} = {value}", decode_value(row, value))
             else:
                 values = [str(f.getValue(row.data)) for f in table.fields]
-                print(timestr(row.getUtc()), ':', ', '.join(values))
+                print(timestr(utc), ':', ', '.join(values))
         print()
 
 
@@ -851,7 +861,7 @@ def main():
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--dump', action='store_true')
     parser.add_argument('--tables', action='store_true', help='Show table summary')
-    parser.add_argument('--export', action='store_true', help='Export data to sqlite')
+    parser.add_argument('--sqlexport', metavar='PATH', help='Export data to sqlite')
     parser.add_argument('--compact', action='store_true')
 
     global verbose
@@ -890,8 +900,8 @@ def main():
     if args.dump:
         dump_blocks(blocks)
 
-    if args.export:
-        export_blocks(blocks)
+    if args.sqlexport:
+        sqlexport_blocks(blocks, args.sqlexport)
 
     if args.tables:
         dump_tables(blocks)
