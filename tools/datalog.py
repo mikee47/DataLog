@@ -95,11 +95,11 @@ class Entry:
                     entry = map[kind](content, log)
                 except (UnicodeDecodeError, IndexError, struct.error, ValueError) as err:
                     entry = None
-                    print(f"seq {block.sequence:#x} @{offset:#010x} {Kind(kind).name}, size {entrySize}, flags {flags}, {type(err).__name__}: {err}")
+                    print(f"seq {block.sequence:#x} @{offset:#010x} {Kind(kind).name}, size {entrySize}, flags {flags}, {type(err).__name__}: {err}", file=sys.stderr)
             if entry is None:
                 entry = UnknownEntry(kind, content, log)
         elif flags != 0xff:
-            print(f"Corrupt block {block.sequence:#x}, skipping from offset {offset:#x}")
+            print(f"Corrupt block {block.sequence:#x}, skipping from offset {offset:#x}", file=sys.stderr)
             return None, 0
 
         if entry is not None:
@@ -260,7 +260,7 @@ class Field(Entry):
         try:
             fmt = self.get_type()[1]
         except:
-            print(f"Bad field type! type {self.type}, size {self.size}, name {self.name}, table {self.table}")
+            print(f"Bad field type! type {self.type}, size {self.size}, name {self.name}, table {self.table}", file=sys.stderr)
             return 0
         if not self.isVariable:
             try:
@@ -268,9 +268,9 @@ class Field(Entry):
                 if fmt != 'x':
                     (value,) = struct.unpack(f"<{fmt}", value)
             except:
-                print("fmt:", fmt)
-                print("offset", self.offset, ", size", self.size, ", len", len(data))
-                print(self)
+                print("fmt:", fmt, file=sys.stderr)
+                print("offset", self.offset, ", size", self.size, ", len", len(data), file=sys.stderr)
+                print(self, file=sys.stderr)
                 return 0
             return value
         fieldLength = 0
@@ -384,10 +384,10 @@ class Block:
         if verbose:
             print(f"Block {b.sequence:#010x}, entrySize {b.size}, data size {len(data) - b.size}, {b.kind}, magic {b.magic:#010x}")
         if b.magic != Block.MAGIC:
-            print("** BAD MAGIC")
+            print("** BAD MAGIC", file=sys.stderr)
             return None
         if b.kind != Kind.block:
-            print("** BAD BLOCK kind")
+            print("** BAD BLOCK kind", file=sys.stderr)
             return None
         b.content = data[12:]
         return b
@@ -419,7 +419,7 @@ class BlockList(dict):
         if verbose:
             print(f"Scanning '{os.path.basename(filename)}', {fileSize} bytes, {(fileSize + Block.SIZE - 1) // Block.SIZE} blocks, {ft}")
         if fileSize % Block.SIZE != 0:
-            print(f"WARNING! File '{os.path.basename(filename)}' size {fileSize:#x} is not a multiple of block size {Block.SIZE:#x}")
+            print(f"WARNING! File '{os.path.basename(filename)}' size {fileSize:#x} is not a multiple of block size {Block.SIZE:#x}", file=sys.stderr)
 
         dupes = 0
         blockCount = 0
@@ -486,7 +486,7 @@ class DataLog:
         self.lastBlockSequence, self.lastBlockLength = block.sequence, len(block.content)
 
         while off < len(block.content):
-            # print(f"offset {12+off:#x}: {' '.join(hex(x) for x in block.content[off:off+8])}")
+            # print(f"offset {12+off:#x}: {' '.join(hex(x) for x in block.content[off:off+8])}", file=sys.stderr)
             entry, size = Entry.read(block, off, self)
             if size <= 0:
                 # Can't read any more from this block
@@ -811,7 +811,6 @@ def main():
     blocks.loadFromFile(args.input)
 
     if len(blocks) == 0:
-        lastBlock = 0
         print("No blocks loaded")
     else:
         seq = sorted(blocks.keys())
