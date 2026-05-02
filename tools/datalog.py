@@ -88,8 +88,8 @@ class Entry:
         if kind == Kind.pad:
             return None, 0
 
-        content = block.content[offset+4:offset+4+entrySize]
         if flags == 0xfe:
+            content = block.content[offset+4:offset+4+entrySize]
             if kind in map:
                 try:
                     entry = map[kind](content, log)
@@ -98,14 +98,14 @@ class Entry:
                     print(f"seq {block.sequence:#x} @{offset:#010x} {Kind(kind).name}, size {entrySize}, flags {flags}, {type(err).__name__}: {err}", file=sys.stderr)
             if entry is None:
                 entry = UnknownEntry(kind, content, log)
-        elif flags != 0xff:
-            print(f"Corrupt block {block.sequence:#x}, skipping from offset {offset:#x}", file=sys.stderr)
-            return None, 0
-
-        if entry is not None:
             entry.block = block
             entry.blockOffset = offset
-        return entry, 4 + entrySize
+            return entry, 4 + entrySize
+
+        if flags != 0xff:
+            print(f"Corrupt block {block.sequence:#x}, skipping from offset {offset:#x}", file=sys.stderr)
+        return None, 0
+
 
     def isValid(self):
         return True
